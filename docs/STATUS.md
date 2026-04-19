@@ -10,12 +10,12 @@
 
 | Step | State | Notes |
 |------|-------|-------|
-| S1 — Bootstrap (apt install, git init, workflow docs) | in_progress | apt install running; docs being written |
-| S2 — CMake + hello Qt window | pending | |
-| S3 — Core: Tile, TileStore, TuxImage | pending | |
-| S4 — Layers + compositor + 13 blend modes | pending | |
-| S5 — UI shell: CanvasView + LayersPanel | pending | |
-| S6 — PNG I/O + File menu | pending | |
+| S1 — Bootstrap (apt install, git init, workflow docs) | ✅ done | 2026-04-20 |
+| S2 — CMake + hello Qt window | ✅ done | 2026-04-20; `./build/tuxels` launches |
+| S3 — Core: Tile, TileStore, TuxImage | ✅ done | 2026-04-20; 15 unit tests pass |
+| S4 — Layers + compositor + 13 blend modes | ✅ done | 2026-04-20; 43 unit tests pass |
+| S5 — UI shell: CanvasView + LayersPanel | ✅ done | 2026-04-20; window hosts sample 3-layer doc |
+| S6 — PNG I/O + File menu | in_progress | |
 | S7 — Brush engine + BrushTool | pending | |
 | S8 — Undo/redo with tile COW | pending | |
 | S9 — Layer masks in UI | pending | |
@@ -23,7 +23,11 @@
 
 ## What Works Right Now
 
-- Nothing executes yet. Tree has: `SCOPE.md`, `.gitignore`, `docs/`.
+- `cmake -S . -B build -G Ninja && cmake --build build` produces `./build/tuxels`.
+- Launching the binary opens a Qt6 main window with Photoshop-style menu stubs (File/Edit/Image/Layer/Select/Filter/View/Window/Help) and a status-bar "Ready".
+- Verified headless: `timeout 2 ./build/tuxels -platform offscreen` runs for 2s without crash.
+- Canvas shows a composited 1024×768 sample document (white bg, red rectangle, green disc blended Multiply); checkerboard around canvas; Ctrl+wheel zoom, middle/shift+drag pan.
+- Layers dock (right) lists layers top-down with per-row visibility toggle, thumbnail, name, blend-mode combo, and opacity slider. Add/Delete/Up/Down via toolbar or Layer menu. Blend-mode or opacity changes trigger recomposite immediately.
 
 ## What Is Broken / Known Issues
 

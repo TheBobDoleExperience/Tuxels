@@ -33,6 +33,12 @@ add_executable(tuxels
   src/app/main.cpp
   src/app/MainWindow.h
   src/app/MainWindow.cpp
+  src/ui/CanvasView.h
+  src/ui/CanvasView.cpp
+  src/ui/LayerRowWidget.h
+  src/ui/LayerRowWidget.cpp
+  src/ui/LayersPanel.h
+  src/ui/LayersPanel.cpp
 )
 target_include_directories(tuxels PRIVATE src)
 target_link_libraries(tuxels PRIVATE
