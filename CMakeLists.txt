@@ -20,6 +20,15 @@ endif()
 
 add_compile_options(-Wall -Wextra -Wpedantic -Werror=return-type)
 
+set(TUXELS_CORE_SOURCES
+  src/layers/PixelLayer.cpp
+  src/compositor/compose.cpp
+)
+
+add_library(tuxels_core STATIC ${TUXELS_CORE_SOURCES})
+set_target_properties(tuxels_core PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+target_include_directories(tuxels_core PUBLIC src)
+
 add_executable(tuxels
   src/app/main.cpp
   src/app/MainWindow.h
@@ -27,6 +36,7 @@ add_executable(tuxels
 )
 target_include_directories(tuxels PRIVATE src)
 target_link_libraries(tuxels PRIVATE
+  tuxels_core
   Qt6::Widgets
   Qt6::Gui
   Qt6::OpenGL
@@ -35,7 +45,14 @@ target_link_libraries(tuxels PRIVATE
 
 enable_testing()
 
-add_executable(test_tile tests/test_tile.cpp)
-set_target_properties(test_tile PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
-target_include_directories(test_tile PRIVATE src tests)
-add_test(NAME core_tile COMMAND test_tile)
+function(tuxels_add_test name)
+  add_executable(${name} tests/${name}.cpp)
+  set_target_properties(${name} PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+  target_include_directories(${name} PRIVATE src tests)
+  target_link_libraries(${name} PRIVATE tuxels_core)
+  add_test(NAME ${name} COMMAND ${name})
+endfunction()
+
+tuxels_add_test(test_tile)
+tuxels_add_test(test_blend_modes)
+tuxels_add_test(test_compositor)

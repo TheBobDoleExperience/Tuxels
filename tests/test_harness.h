@@ -79,3 +79,13 @@ inline int run() {
       ::tuxels::testing::failure(__FILE__, __LINE__,                       \
                                  std::string(#a " ~= " #b " failed"));     \
   } while (0)
+
+#define CHECK_NEAR(a, b, eps)                                              \
+  do {                                                                     \
+    double _da = static_cast<double>(a);                                   \
+    double _db = static_cast<double>(b);                                   \
+    double _de = static_cast<double>(eps);                                 \
+    if (!(std::fabs(_da - _db) <= _de))                                    \
+      ::tuxels::testing::failure(__FILE__, __LINE__,                       \
+                                 std::string(#a " ~= " #b " failed"));    \
+  } while (0)
