@@ -1,0 +1,32 @@
+# Build output
+/build/
+/build-*/
+/cmake-build-*/
+
+# IDE
+.vscode/
+.idea/
+*.user
+.cache/
+compile_commands.json
+
+# Editor
+*.swp
+*~
+.DS_Store
+
+# Qt
+*.moc
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+
+# Object files
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+
+# Executables (the binary lives in build/)
+/tuxels

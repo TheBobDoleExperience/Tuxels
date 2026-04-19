@@ -1,0 +1,155 @@
+# Tuxels — As-Built Architecture
+
+Supplements (does not duplicate) `/home/james/Tuxels/SCOPE.md`. SCOPE.md is the aspirational blueprint; this file captures concrete decisions as we implement. If a decision here conflicts with SCOPE.md, this file wins (and note the deviation).
+
+---
+
+## 1. Pixel Format (Internal)
+
+```cpp
+struct Rgba32F { float r, g, b, a; };  // 16 bytes, aligned
+```
+
+- 32-bit float per channel; always, regardless of source/target bit depth.
+- **Alpha semantics (internal):** straight alpha (not premultiplied). Blend-mode math is per-channel on straight values. Conversion to premultiplied only at compositing "over" boundaries and GPU upload (later phase).
+- Why: SCOPE.md §5.4.2 — "internal compositing pipeline should always operate in at least 32-bit float." Also avoids 8-bit banding under heavy edits.
+- Future: CMYK/Lab/Grayscale modes will be separate pixel types or a tagged-channel generalization. M0 is RGBA only.
+
+## 2. Tile Size and Layout
+
+- Fixed **256 × 256 pixels** per tile for M0. Constant lives in `core/Tile.h` as `kTilePx = 256`.
+- Each tile is a contiguous `std::array<Rgba32F, kTilePx * kTilePx>` on the heap (via `std::unique_ptr`). Row-major, origin top-left.
+- Tiles are the unit of: sparse allocation, dirty invalidation, undo snapshot, and (later) GPU upload.
+- A `TileStore` holds `std::unordered_map<TileCoord, std::shared_ptr<Tile>>`. Absent tiles are conceptually fully-transparent.
+- Copy-on-write: when a command needs to snapshot, it stashes the `shared_ptr<Tile>` for later restore and allocates a fresh writable tile.
+
+## 3. Image Type
+
+`TuxImage`:
+- `int width, height` in pixels.
+- `TileStore tiles`.
+- Methods: `Rgba32F getPixel(int,int) const`, `void setPixel(int,int,Rgba32F)`, `Tile* getOrCreateTile(TileCoord)`, `const Tile* findTile(TileCoord) const`, `void forEachTile(callback)`, `Rect boundingBoxOfAllocated() const`.
+- No width/height padding to tile boundary — the canvas logical size is exact; tiles at the right/bottom edges are cropped when read.
+
+## 4. Layer Tree
+
+- M0: flat ordered list `std::vector<std::unique_ptr<LayerBase>>`. Index 0 = bottom layer.
+- `LayerBase` abstract API:
+  - `LayerID id` (monotonic uint64)
+  - `std::string name`
+  - `bool visible`
+  - `float opacity ∈ [0, 1]`
+  - `BlendMode blend` (enum)
+  - `std::unique_ptr<LayerMask> mask` (nullable)
+  - virtual `void renderTile(TileCoord tc, Rgba32F* out) const` — produces the layer's contribution tile for compositing (before mask/opacity/blend).
+- Concrete M0 subclasses:
+  - `PixelLayer` — owns a `TuxImage`.
+- Future: `AdjustmentLayer`, `GroupLayer`, `SmartObjectLayer`, `TextLayer` (not in M0).
+
+## 5. Masks
+
+- `LayerMask` = `TuxImage` but semantically grayscale (only `.r` read; `.g`=`.b`=`.r` when painted). In M0, reuse `Rgba32F` for simplicity; optimize to an 8-/16-bit single-channel later.
+- Mask is applied by multiplying layer-contribution alpha by mask intensity before blend.
+- `enabled` flag (shift-click toggles).
+- Default mask fill = 1.0 (fully reveals).
+
+## 6. Blend Modes (M0 set: 13)
+
+Implemented in `src/compositor/blend.cpp`. Formulas operate per-channel on *straight-alpha* float values in [0, 1]; result alpha = `sa + da*(1-sa)`; result color = Porter-Duff "over" with the mode's compositing function substituted for the standard `src*sa + dst*(1-sa)`.
+
+```
+Normal:       C = Cs
+Dissolve:     C = Cs if rand() < sa else Cd   (stochastic; seeded per-stroke for repeatability)
+Darken:       C = min(Cs, Cd)
+Multiply:     C = Cs * Cd
+Color Burn:   C = 1 - (1 - Cd) / Cs   (Cs==0 → 0;  careful with divide-by-zero)
+Lighten:      C = max(Cs, Cd)
+Screen:       C = 1 - (1 - Cs) * (1 - Cd)
+Color Dodge:  C = Cd / (1 - Cs)   (Cs==1 → 1)
+Overlay:      C = if Cd <= 0.5: 2*Cs*Cd  else: 1 - 2*(1-Cs)*(1-Cd)
+Soft Light:   (Photoshop variant — not W3C)
+              if Cs <= 0.5: C = Cd - (1 - 2*Cs) * Cd * (1 - Cd)
+              else:          C = Cd + (2*Cs - 1) * (D(Cd) - Cd)
+              where D(Cd) = ((16*Cd - 12) * Cd + 4) * Cd   if Cd <= 0.25 else sqrt(Cd)
+Hard Light:   symmetric of Overlay: switch on Cs.
+Difference:   C = |Cs - Cd|
+Exclusion:    C = Cs + Cd - 2*Cs*Cd
+```
+
+- Unit tests per mode: at least 3 input/output pairs per mode, values checked to ±1e-5.
+- Deferred (remaining 14 PS modes): Linear Burn, Linear Dodge (Add), Vivid Light, Linear Light, Pin Light, Hard Mix, Subtract, Divide, Hue, Saturation, Color, Luminosity, Darker Color, Lighter Color. Scheduled for Phase 2 of SCOPE.md.
+
+## 7. Compositor
+
+- `compose(const LayerTree& tree, const Rect& viewport, TuxImage& out)` in `src/compositor/compose.cpp`.
+- Walk tile coordinates spanning `viewport`. For each tile coord:
+  - Start with transparent accumulator (`Rgba32F{0,0,0,0}`).
+  - For each layer (bottom to top) if visible:
+    - `renderTile` → get layer tile contribution.
+    - Multiply layer alpha by `opacity` and mask value (if mask present and enabled).
+    - Blend using `layer.blend` against accumulator.
+  - Write accumulator into the corresponding tile of `out`.
+- **Dirty region invalidation:** layer mutations mark affected tile coords in a `DirtySet`; `CanvasView` composites only dirty tiles to a cached final `TuxImage`.
+- Single-threaded CPU for M0. Multi-thread per-tile (std::async or thread pool) is a simple drop-in for later.
+
+## 8. Color Management (M0 scope)
+
+- sRGB passthrough only. PNG load: `QImage::Format_RGBA8888` → divide by 255 → Rgba32F.
+- Export: Rgba32F → multiply by 255 → clamp → `QImage::Format_RGBA8888` → write as PNG via Qt.
+- No gamma linearization yet (known limitation; will be addressed alongside lcms2 transforms when working-space selection is added).
+- `ColorSpace` placeholder type exists so that per-image color spaces can be attached later without callers changing.
+
+## 9. Undo/Redo
+
+- `Command` abstract: `void execute()`, `void undo()`, `size_t memoryEstimate() const`.
+- `UndoStack`: `std::vector<std::unique_ptr<Command>>` + cursor index.
+- `PaintCommand`:
+  - Snapshots `std::map<TileCoord, std::shared_ptr<Tile>>` of pre-stroke tiles (COW — cheap because we swap in fresh writable tiles before painting).
+  - On undo: swap pre-stroke tiles back into place.
+  - Begins on mouse-down, accumulates during drag, commits on mouse-up.
+- `LayerOpCommand`: add/delete/reorder/rename/blend-mode-change — snapshots relevant metadata.
+- No merging of consecutive commands in M0.
+- Memory budget unbounded in M0; add a cap in Phase 2.
+
+## 10. Canvas Widget
+
+- `CanvasView : public QOpenGLWidget`.
+- Keeps a `QOpenGLTexture` with the composited `TuxImage` uploaded as RGBA8 for display.
+- paintGL: draw a fullscreen quad with the texture, respecting zoom + pan transform.
+- Mouse events forwarded to the active `Tool`.
+- Zoom: Ctrl+scroll, centered on cursor. Pan: middle-drag or space-drag.
+
+## 11. Tools
+
+- `ToolBase` abstract: `mousePressEvent`, `mouseMoveEvent`, `mouseReleaseEvent`, `wheelEvent`, `keyPressEvent` — all take canvas-space pixel coords + modifiers.
+- `BrushTool` for M0. Move/Select/etc. are stubs.
+- Active tool held by `MainWindow`, forwarded to `CanvasView` via signals/slots.
+
+## 12. Brush
+
+- `RoundBrush`:
+  - `float diameter` (pixels), `float hardness ∈ [0,1]`, `float opacity ∈ [0,1]`, `float flow ∈ [0,1]`, `float spacingRatio` (default 0.1, i.e., stamps every 10% of diameter along the stroke).
+  - Precompute `stampKernel` (2D array of coverage 0..1) when diameter/hardness changes. Falloff: smoothstep from hardness*radius to radius.
+- `BrushTool::stroke()` accumulates distance and drops stamps at `spacingRatio * diameter` intervals. Each stamp blends its kernel into the target buffer using a per-pixel "over" with color × stamp × flow. Opacity caps accumulated stamp coverage per-stroke (Photoshop "opacity" semantics, approximately).
+- Paint target: active layer's `TuxImage` OR its mask's `TuxImage` if mask is selected.
+
+## 13. File I/O (M0)
+
+- Only PNG via Qt's built-in loader (wraps libpng). `tests/fixtures/test_rgba.png` generated programmatically inside a test — no binary checked in initially.
+
+---
+
+## Deviations from SCOPE.md (intentional, M0-only)
+
+| SCOPE.md item | M0 deviation | Rationale |
+|---|---|---|
+| Full color management (§5.4.3) | sRGB passthrough only | Correct ICC pipeline is a Phase 1 item; M0 is about the editing model |
+| 27+ blend modes (§5.1.1) | 13 modes | Enough to prove correctness; remaining 14 are deterministic to add later |
+| CMYK/Lab/Grayscale (§5.4.1) | RGBA only | Channel abstraction deferred to Phase 2 |
+| GPU compositing (§5.2) | CPU, single-threaded | Phase 5 work per SCOPE.md's own schedule |
+| PSD read/write (§5.1) | Not implemented | Phase 2; M0 is PNG-only |
+| Adjustment layers, styles, smart objects, text | Deferred | Phase 2/4/5 per SCOPE.md |
+
+## Open Questions
+
+*(None blocking M0. Future decisions logged here as they arise.)*
