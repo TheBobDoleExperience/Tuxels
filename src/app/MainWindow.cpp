@@ -17,6 +17,7 @@
 #include "history/PaintCommand.h"
 #include "history/UndoStack.h"
 #include "io/PngIO.h"
+#include "layers/LayerMask.h"
 #include "layers/PixelLayer.h"
 #include "tools/BrushTool.h"
 #include "ui/CanvasView.h"
@@ -86,6 +87,12 @@ void MainWindow::buildMenus() {
   auto* delLayerAct = layerMenu->addAction(tr("&Delete Layer"));
   connect(delLayerAct, &QAction::triggered, this, &MainWindow::onLayerDelete);
 
+  layerMenu->addSeparator();
+  auto* addMaskAct = layerMenu->addAction(tr("Add Layer &Mask"));
+  connect(addMaskAct, &QAction::triggered, this, &MainWindow::onAddLayerMask);
+  auto* delMaskAct = layerMenu->addAction(tr("D&elete Layer Mask"));
+  connect(delMaskAct, &QAction::triggered, this, &MainWindow::onDeleteLayerMask);
+
   mb->addMenu(tr("&Select"));
   mb->addMenu(tr("&Filter"));
   mb->addMenu(tr("&View"));
@@ -127,6 +134,12 @@ void MainWindow::buildDocks() {
           &MainWindow::onLayerBlendChange);
   connect(layersPanel_, &LayersPanel::opacityEditCommitted, this,
           &MainWindow::onLayerOpacityCommit);
+  connect(layersPanel_, &LayersPanel::paintTargetChangeRequested, this,
+          &MainWindow::onLayerPaintTargetChange);
+  connect(layersPanel_, &LayersPanel::maskEnabledToggleRequested, this,
+          &MainWindow::onLayerMaskEnabledToggle);
+  connect(layersPanel_, &LayersPanel::deleteMaskRequested, this,
+          &MainWindow::onLayerDeleteMaskRequest);
 }
 
 void MainWindow::setDocument(std::unique_ptr<Document> doc) {
@@ -363,9 +376,9 @@ void MainWindow::onActiveLayerChanged() {
 void MainWindow::onLayerPainted() {
   if (!brushTool_ || !doc_) return;
   auto info = brushTool_->takeLastStroke();
-  if (info.layer) {
+  if (info.layer && info.target) {
     auto cmd = std::make_unique<PaintCommand>(
-        &info.layer->image, std::move(info.recorded.before),
+        info.target, std::move(info.recorded.before),
         std::move(info.recorded.after), "Paint Stroke");
     undoStack_->push(std::move(cmd));
   }
@@ -432,6 +445,101 @@ void MainWindow::onLayerOpacityCommit(LayerBase* layer, float oldVal, float newV
   // reversible pair. Calling doIt() would be a no-op since newVal is the
   // current value, but we skip it to avoid a redundant refresh.
   undoStack_->push(std::make_unique<LayerOpCommand>("Change Opacity",
+                                                    std::move(doIt),
+                                                    std::move(undoIt)));
+}
+
+void MainWindow::onAddLayerMask() {
+  if (!doc_) return;
+  auto* px = dynamic_cast<PixelLayer*>(doc_->activeLayer());
+  if (!px) {
+    statusBar()->showMessage(tr("Masks require a pixel layer."), 3000);
+    return;
+  }
+  if (px->mask) {
+    statusBar()->showMessage(tr("Layer already has a mask."), 3000);
+    return;
+  }
+  const int w = doc_->width();
+  const int h = doc_->height();
+  auto stash = std::make_shared<std::unique_ptr<LayerMask>>();
+
+  auto doIt = [this, px, stash, w, h]() mutable {
+    if (*stash) {
+      px->mask = std::move(*stash);
+    } else {
+      auto m = std::make_unique<LayerMask>(w, h);
+      m->image.fill(Rgba32F(1.f, 1.f, 1.f, 1.f));  // fully reveal
+      px->mask = std::move(m);
+    }
+    doc_->setPaintTarget(PaintTarget::Mask);
+    refreshAfterUndoRedo();
+  };
+  auto undoIt = [this, px, stash]() mutable {
+    *stash = std::move(px->mask);
+    doc_->setPaintTarget(PaintTarget::Layer);
+    refreshAfterUndoRedo();
+  };
+
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>("Add Layer Mask",
+                                                    std::move(doIt),
+                                                    std::move(undoIt)));
+}
+
+void MainWindow::onDeleteLayerMask() {
+  if (!doc_) return;
+  auto* px = dynamic_cast<PixelLayer*>(doc_->activeLayer());
+  if (!px || !px->mask) return;
+  onLayerDeleteMaskRequest(px);
+}
+
+void MainWindow::onLayerPaintTargetChange(LayerBase* layer, PaintTarget target) {
+  if (!doc_ || !layer) return;
+  const auto n = doc_->tree().size();
+  for (std::size_t i = 0; i < n; ++i) {
+    if (doc_->tree().at(i) == layer) {
+      doc_->setActiveLayerIndex(static_cast<int>(i));
+      break;
+    }
+  }
+  doc_->setPaintTarget(target);
+  if (layersPanel_) layersPanel_->refresh();
+}
+
+void MainWindow::onLayerMaskEnabledToggle(LayerBase* layer, bool oldVal,
+                                          bool newVal) {
+  if (!layer || !layer->mask || !undoStack_) return;
+  auto doIt = [this, layer, newVal]() {
+    if (layer->mask) layer->mask->enabled = newVal;
+    refreshAfterUndoRedo();
+  };
+  auto undoIt = [this, layer, oldVal]() {
+    if (layer->mask) layer->mask->enabled = oldVal;
+    refreshAfterUndoRedo();
+  };
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>("Toggle Mask Enabled",
+                                                    std::move(doIt),
+                                                    std::move(undoIt)));
+}
+
+void MainWindow::onLayerDeleteMaskRequest(LayerBase* layer) {
+  if (!layer || !layer->mask || !undoStack_) return;
+  auto stash = std::make_shared<std::unique_ptr<LayerMask>>();
+
+  auto doIt = [this, layer, stash]() mutable {
+    *stash = std::move(layer->mask);
+    if (doc_) doc_->setPaintTarget(PaintTarget::Layer);
+    refreshAfterUndoRedo();
+  };
+  auto undoIt = [this, layer, stash]() mutable {
+    layer->mask = std::move(*stash);
+    refreshAfterUndoRedo();
+  };
+
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>("Delete Layer Mask",
                                                     std::move(doIt),
                                                     std::move(undoIt)));
 }

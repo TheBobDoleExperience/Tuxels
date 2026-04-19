@@ -4,12 +4,12 @@
 #include <memory>
 
 #include "compositor/BlendMode.h"
+#include "core/Document.h"
 
 namespace tuxels {
 
 class BrushTool;
 class CanvasView;
-class Document;
 class LayerBase;
 class LayersPanel;
 class UndoStack;
@@ -39,6 +39,11 @@ class MainWindow : public QMainWindow {
   void onLayerVisibilityChange(LayerBase* layer, bool oldVal, bool newVal);
   void onLayerBlendChange(LayerBase* layer, BlendMode oldMode, BlendMode newMode);
   void onLayerOpacityCommit(LayerBase* layer, float oldVal, float newVal);
+  void onAddLayerMask();
+  void onDeleteLayerMask();
+  void onLayerPaintTargetChange(LayerBase* layer, PaintTarget target);
+  void onLayerMaskEnabledToggle(LayerBase* layer, bool oldVal, bool newVal);
+  void onLayerDeleteMaskRequest(LayerBase* layer);
 
  private:
   void buildMenus();

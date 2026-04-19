@@ -84,6 +84,12 @@ void LayersPanel::refresh() {
             &LayersPanel::blendChangeRequested);
     connect(row, &LayerRowWidget::opacityEditCommitted, this,
             &LayersPanel::opacityEditCommitted);
+    connect(row, &LayerRowWidget::paintTargetChangeRequested, this,
+            &LayersPanel::paintTargetChangeRequested);
+    connect(row, &LayerRowWidget::maskEnabledToggleRequested, this,
+            &LayersPanel::maskEnabledToggleRequested);
+    connect(row, &LayerRowWidget::deleteMaskRequested, this,
+            &LayersPanel::deleteMaskRequested);
 
     auto* item = new QListWidgetItem();
     item->setSizeHint(row->sizeHint());
@@ -100,6 +106,7 @@ void LayersPanel::refresh() {
   }
   for (int i = 0; i < static_cast<int>(rows_.size()); ++i) {
     rows_[static_cast<std::size_t>(i)]->setActive(i == list_->currentRow());
+    rows_[static_cast<std::size_t>(i)]->setPaintTarget(doc_->paintTarget());
   }
 
   refreshing_ = false;

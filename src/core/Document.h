@@ -10,6 +10,8 @@
 
 namespace tuxels {
 
+enum class PaintTarget { Layer, Mask };
+
 // The editor's top-level model: canvas dimensions + ordered layer tree +
 // active-layer index. No Qt dependency so tests and non-UI code can own one.
 class Document {
@@ -32,6 +34,9 @@ class Document {
     }
     activeLayerIndex_ = i;
   }
+
+  PaintTarget paintTarget() const noexcept { return paintTarget_; }
+  void setPaintTarget(PaintTarget t) noexcept { paintTarget_ = t; }
 
   LayerBase* activeLayer() {
     if (activeLayerIndex_ < 0) return nullptr;
@@ -62,6 +67,7 @@ class Document {
   LayerTree tree_;
   int activeLayerIndex_ = -1;
   LayerId nextId_ = 0;
+  PaintTarget paintTarget_ = PaintTarget::Layer;
 };
 
 }  // namespace tuxels

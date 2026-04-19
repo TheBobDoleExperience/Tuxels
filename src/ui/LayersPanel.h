@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "compositor/BlendMode.h"
+#include "core/Document.h"
 
 class QListWidget;
 class QListWidgetItem;
@@ -36,6 +37,9 @@ class LayersPanel : public QDockWidget {
   void visibilityChangeRequested(LayerBase* layer, bool oldVal, bool newVal);
   void blendChangeRequested(LayerBase* layer, BlendMode oldMode, BlendMode newMode);
   void opacityEditCommitted(LayerBase* layer, float oldVal, float newVal);
+  void paintTargetChangeRequested(LayerBase* layer, PaintTarget target);
+  void maskEnabledToggleRequested(LayerBase* layer, bool oldVal, bool newVal);
+  void deleteMaskRequested(LayerBase* layer);
 
  private slots:
   void onCurrentRowChanged(int row);

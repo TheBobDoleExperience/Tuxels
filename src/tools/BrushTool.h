@@ -25,6 +25,7 @@ class BrushTool : public ToolBase {
 
   struct StrokeInfo {
     PixelLayer* layer = nullptr;
+    TuxImage* target = nullptr;  // &layer->image or &layer->mask->image
     Rect bounds;
     TuxImage::Recorded recorded;
   };
@@ -38,6 +39,7 @@ class BrushTool : public ToolBase {
  private:
   RoundBrush brush_;
   PixelLayer* active_ = nullptr;
+  TuxImage* activeTarget_ = nullptr;
   std::unique_ptr<BrushEngine> engine_;
   StrokeInfo last_{};
 };

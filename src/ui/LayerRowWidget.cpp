@@ -5,16 +5,20 @@
 #include <QHBoxLayout>
 #include <QImage>
 #include <QLabel>
+#include <QMenu>
+#include <QMouseEvent>
 #include <QPalette>
 #include <QPixmap>
 #include <QSlider>
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 #include "compositor/BlendMode.h"
 #include "core/Tile.h"
 #include "core/TuxImage.h"
 #include "layers/LayerBase.h"
+#include "layers/LayerMask.h"
 #include "layers/PixelLayer.h"
 
 namespace tuxels {
@@ -43,7 +47,19 @@ LayerRowWidget::LayerRowWidget(QWidget* parent) : QWidget(parent) {
   thumb_ = new QLabel(this);
   thumb_->setFixedSize(kThumbPx, kThumbPx);
   thumb_->setFrameStyle(QFrame::StyledPanel);
+  thumb_->setToolTip(tr("Layer thumbnail — click to paint on layer"));
+  thumb_->installEventFilter(this);
   layout->addWidget(thumb_);
+
+  maskThumb_ = new QLabel(this);
+  maskThumb_->setFixedSize(kThumbPx, kThumbPx);
+  maskThumb_->setFrameStyle(QFrame::StyledPanel);
+  maskThumb_->setToolTip(
+      tr("Mask thumbnail — click to paint on mask, shift-click to "
+         "enable/disable, right-click for options"));
+  maskThumb_->installEventFilter(this);
+  maskThumb_->hide();
+  layout->addWidget(maskThumb_);
 
   nameLabel_ = new QLabel(this);
   nameLabel_->setMinimumWidth(90);
@@ -94,11 +110,14 @@ void LayerRowWidget::bindToLayer(LayerBase* layer) {
     }
     blendCombo_->setCurrentIndex(idx);
     rebuildThumbnail();
+    rebuildMaskThumbnail();
+    updateThumbHighlight();
   }
   blockSignals_ = false;
 }
 
 void LayerRowWidget::setActive(bool active) {
+  active_ = active;
   QPalette pal = palette();
   if (active) {
     pal.setColor(QPalette::Window, QColor(60, 120, 200));
@@ -107,7 +126,13 @@ void LayerRowWidget::setActive(bool active) {
     setAutoFillBackground(false);
   }
   setPalette(pal);
+  updateThumbHighlight();
   update();
+}
+
+void LayerRowWidget::setPaintTarget(PaintTarget t) {
+  paintTarget_ = t;
+  updateThumbHighlight();
 }
 
 void LayerRowWidget::onVisibilityToggled(bool checked) {
@@ -129,8 +154,6 @@ void LayerRowWidget::onBlendChanged(int index) {
 void LayerRowWidget::onOpacitySliderMoved(int sliderValue) {
   opacityValue_->setText(QStringLiteral("%1%").arg(sliderValue));
   if (blockSignals_ || !layer_) return;
-  // Live-update the layer so the canvas previews the change while dragging.
-  // The undo entry is committed on sliderReleased, below.
   layer_->opacity = static_cast<float>(sliderValue) / 100.f;
   emit layerMutated(layer_);
 }
@@ -145,6 +168,36 @@ void LayerRowWidget::onOpacitySliderReleased() {
   const float newVal = layer_->opacity;
   if (std::fabs(newVal - opacityBeforeDrag_) < 1e-4f) return;
   emit opacityEditCommitted(layer_, opacityBeforeDrag_, newVal);
+}
+
+bool LayerRowWidget::eventFilter(QObject* watched, QEvent* event) {
+  if (!layer_) return QWidget::eventFilter(watched, event);
+  if (watched == thumb_ && event->type() == QEvent::MouseButtonPress) {
+    auto* me = static_cast<QMouseEvent*>(event);
+    if (me->button() == Qt::LeftButton) {
+      emit paintTargetChangeRequested(layer_, PaintTarget::Layer);
+      return true;
+    }
+  } else if (watched == maskThumb_ && event->type() == QEvent::MouseButtonPress) {
+    auto* me = static_cast<QMouseEvent*>(event);
+    if (me->button() == Qt::LeftButton) {
+      if (me->modifiers() & Qt::ShiftModifier) {
+        const bool oldVal = layer_->mask && layer_->mask->enabled;
+        emit maskEnabledToggleRequested(layer_, oldVal, !oldVal);
+      } else {
+        emit paintTargetChangeRequested(layer_, PaintTarget::Mask);
+      }
+      return true;
+    }
+    if (me->button() == Qt::RightButton) {
+      QMenu menu(this);
+      auto* deleteAct = menu.addAction(tr("Delete Mask"));
+      QAction* chosen = menu.exec(me->globalPosition().toPoint());
+      if (chosen == deleteAct) emit deleteMaskRequested(layer_);
+      return true;
+    }
+  }
+  return QWidget::eventFilter(watched, event);
 }
 
 void LayerRowWidget::rebuildThumbnail() {
@@ -174,6 +227,52 @@ void LayerRowWidget::rebuildThumbnail() {
     }
   }
   thumb_->setPixmap(QPixmap::fromImage(img));
+}
+
+void LayerRowWidget::rebuildMaskThumbnail() {
+  if (!layer_ || !maskThumb_) return;
+  if (!layer_->mask) {
+    maskThumb_->hide();
+    maskThumb_->clear();
+    return;
+  }
+  const TuxImage& mi = layer_->mask->image;
+  QImage img(kThumbPx, kThumbPx, QImage::Format_RGBA8888);
+  const int iw = mi.width();
+  const int ih = mi.height();
+  for (int y = 0; y < kThumbPx; ++y) {
+    for (int x = 0; x < kThumbPx; ++x) {
+      float v = 1.f;
+      if (iw > 0 && ih > 0) {
+        const int sx = std::min(iw - 1, x * iw / kThumbPx);
+        const int sy = std::min(ih - 1, y * ih / kThumbPx);
+        v = std::clamp(mi.getPixel(sx, sy).r, 0.f, 1.f);
+      }
+      auto* row = reinterpret_cast<uchar*>(img.scanLine(y));
+      const auto g = static_cast<uchar>(std::lround(v * 255.f));
+      row[x * 4 + 0] = g;
+      row[x * 4 + 1] = g;
+      row[x * 4 + 2] = g;
+      row[x * 4 + 3] = 255;
+    }
+  }
+  maskThumb_->setPixmap(QPixmap::fromImage(img));
+  maskThumb_->show();
+  // Visually indicate a disabled mask with a dim overlay via tooltip only
+  // for M0 — stylesheet reuse happens in updateThumbHighlight().
+}
+
+void LayerRowWidget::updateThumbHighlight() {
+  const bool layerSel = active_ && paintTarget_ == PaintTarget::Layer;
+  const bool maskSel = active_ && paintTarget_ == PaintTarget::Mask;
+  thumb_->setStyleSheet(layerSel ? "border: 2px solid #3cf;" : "");
+  if (!maskThumb_) return;
+  QString style;
+  if (maskSel) style += "border: 2px solid #3cf;";
+  if (layer_ && layer_->mask && !layer_->mask->enabled) {
+    style += "background-color: rgba(200,0,0,60);";
+  }
+  maskThumb_->setStyleSheet(style);
 }
 
 }  // namespace tuxels

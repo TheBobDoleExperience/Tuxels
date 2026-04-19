@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "compositor/BlendMode.h"
+#include "core/Document.h"
 
 class QCheckBox;
 class QComboBox;
@@ -14,7 +15,7 @@ namespace tuxels {
 
 class LayerBase;
 
-// One visual row for a layer: [vis][thumb][name][blend mode][opacity].
+// One visual row for a layer: [vis][thumb][mask?][name][blend mode][opacity].
 class LayerRowWidget : public QWidget {
   Q_OBJECT
 
@@ -27,6 +28,8 @@ class LayerRowWidget : public QWidget {
 
   // Mark the row visually as the active layer.
   void setActive(bool active);
+  // Which of (layer thumb, mask thumb) should be highlighted when active.
+  void setPaintTarget(PaintTarget t);
 
  signals:
   // Emitted after a user interaction changes the bound layer. The listener
@@ -36,6 +39,15 @@ class LayerRowWidget : public QWidget {
   void visibilityChangeRequested(LayerBase* layer, bool oldVal, bool newVal);
   void blendChangeRequested(LayerBase* layer, BlendMode oldMode, BlendMode newMode);
   void opacityEditCommitted(LayerBase* layer, float oldVal, float newVal);
+  // Click on layer or mask thumb — select that target on this layer.
+  void paintTargetChangeRequested(LayerBase* layer, PaintTarget target);
+  // Shift-click on mask thumb — toggle mask->enabled.
+  void maskEnabledToggleRequested(LayerBase* layer, bool oldVal, bool newVal);
+  // Right-click "Delete Mask" on the mask thumb.
+  void deleteMaskRequested(LayerBase* layer);
+
+ protected:
+  bool eventFilter(QObject* watched, QEvent* event) override;
 
  private slots:
   void onVisibilityToggled(bool checked);
@@ -46,13 +58,18 @@ class LayerRowWidget : public QWidget {
 
  private:
   void rebuildThumbnail();
+  void rebuildMaskThumbnail();
+  void updateThumbHighlight();
 
   LayerBase* layer_ = nullptr;
   bool blockSignals_ = false;
+  bool active_ = false;
+  PaintTarget paintTarget_ = PaintTarget::Layer;
   float opacityBeforeDrag_ = 1.f;
 
   QCheckBox* visCheck_ = nullptr;
   QLabel* thumb_ = nullptr;
+  QLabel* maskThumb_ = nullptr;
   QLabel* nameLabel_ = nullptr;
   QComboBox* blendCombo_ = nullptr;
   QSlider* opacitySlider_ = nullptr;
