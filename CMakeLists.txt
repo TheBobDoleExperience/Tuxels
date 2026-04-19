@@ -34,3 +34,8 @@ target_link_libraries(tuxels PRIVATE
 )
 
 enable_testing()
+
+add_executable(test_tile tests/test_tile.cpp)
+set_target_properties(test_tile PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+target_include_directories(test_tile PRIVATE src tests)
+add_test(NAME core_tile COMMAND test_tile)
