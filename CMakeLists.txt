@@ -29,6 +29,11 @@ add_library(tuxels_core STATIC ${TUXELS_CORE_SOURCES})
 set_target_properties(tuxels_core PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
 target_include_directories(tuxels_core PUBLIC src)
 
+add_library(tuxels_io STATIC src/io/PngIO.cpp)
+set_target_properties(tuxels_io PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+target_include_directories(tuxels_io PUBLIC src)
+target_link_libraries(tuxels_io PUBLIC tuxels_core Qt6::Gui)
+
 add_executable(tuxels
   src/app/main.cpp
   src/app/MainWindow.h
@@ -43,6 +48,7 @@ add_executable(tuxels
 target_include_directories(tuxels PRIVATE src)
 target_link_libraries(tuxels PRIVATE
   tuxels_core
+  tuxels_io
   Qt6::Widgets
   Qt6::Gui
   Qt6::OpenGL
@@ -62,3 +68,9 @@ endfunction()
 tuxels_add_test(test_tile)
 tuxels_add_test(test_blend_modes)
 tuxels_add_test(test_compositor)
+
+add_executable(test_png_io tests/test_png_io.cpp)
+set_target_properties(test_png_io PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+target_include_directories(test_png_io PRIVATE src tests)
+target_link_libraries(test_png_io PRIVATE tuxels_io)
+add_test(NAME test_png_io COMMAND test_png_io)

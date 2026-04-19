@@ -15,8 +15,8 @@
 | S3 — Core: Tile, TileStore, TuxImage | ✅ done | 2026-04-20; 15 unit tests pass |
 | S4 — Layers + compositor + 13 blend modes | ✅ done | 2026-04-20; 43 unit tests pass |
 | S5 — UI shell: CanvasView + LayersPanel | ✅ done | 2026-04-20; window hosts sample 3-layer doc |
-| S6 — PNG I/O + File menu | in_progress | |
-| S7 — Brush engine + BrushTool | pending | |
+| S6 — PNG I/O + File menu | ✅ done | 2026-04-20; PngIO round-trip unit tests pass |
+| S7 — Brush engine + BrushTool | in_progress | |
 | S8 — Undo/redo with tile COW | pending | |
 | S9 — Layer masks in UI | pending | |
 | S10 — Verify + tag v0.0.1-m0 | pending | |
@@ -28,6 +28,7 @@
 - Verified headless: `timeout 2 ./build/tuxels -platform offscreen` runs for 2s without crash.
 - Canvas shows a composited 1024×768 sample document (white bg, red rectangle, green disc blended Multiply); checkerboard around canvas; Ctrl+wheel zoom, middle/shift+drag pan.
 - Layers dock (right) lists layers top-down with per-row visibility toggle, thumbnail, name, blend-mode combo, and opacity slider. Add/Delete/Up/Down via toolbar or Layer menu. Blend-mode or opacity changes trigger recomposite immediately.
+- `File → Open…` imports an 8-bit PNG as a single pixel layer; `File → Export As PNG…` composites the document and writes an 8-bit sRGB PNG. PngIO round-trip verified in `test_png_io`.
 
 ## What Is Broken / Known Issues
 

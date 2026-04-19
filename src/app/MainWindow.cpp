@@ -2,13 +2,17 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QInputDialog>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QStatusBar>
 
+#include "compositor/compose.h"
 #include "core/Document.h"
+#include "io/PngIO.h"
 #include "layers/PixelLayer.h"
 #include "ui/CanvasView.h"
 #include "ui/LayersPanel.h"
@@ -141,13 +145,47 @@ void MainWindow::onFileNew() {
 }
 
 void MainWindow::onFileOpen() {
-  QMessageBox::information(this, tr("Open"),
-                           tr("PNG Open is wired in the next step (S6)."));
+  const QString path = QFileDialog::getOpenFileName(
+      this, tr("Open Image"), QString(), tr("PNG Images (*.png)"));
+  if (path.isEmpty()) return;
+
+  QString err;
+  auto img = loadPng(path, &err);
+  if (!img) {
+    QMessageBox::warning(this, tr("Open Failed"),
+                         tr("Could not open %1:\n%2").arg(path, err));
+    return;
+  }
+
+  auto doc = std::make_unique<Document>(img->width(), img->height());
+  auto* layer = doc->addBlankPixelLayer(QFileInfo(path).fileName().toStdString());
+  layer->image = std::move(*img);
+  setDocument(std::move(doc));
+  layersPanel_->refresh();
+  canvas_->requestRecomposite();
+  statusBar()->showMessage(tr("Opened %1").arg(path), 3000);
 }
 
 void MainWindow::onFileExport() {
-  QMessageBox::information(this, tr("Export"),
-                           tr("PNG Export is wired in the next step (S6)."));
+  if (!doc_ || doc_->width() <= 0 || doc_->height() <= 0) {
+    QMessageBox::warning(this, tr("Export"),
+                         tr("No document to export."));
+    return;
+  }
+  const QString path = QFileDialog::getSaveFileName(
+      this, tr("Export PNG"), QString(), tr("PNG Images (*.png)"));
+  if (path.isEmpty()) return;
+
+  TuxImage out(doc_->width(), doc_->height());
+  compose(doc_->tree(), out);
+
+  QString err;
+  if (!savePng(path, out, &err)) {
+    QMessageBox::warning(this, tr("Export Failed"),
+                         tr("Could not write %1:\n%2").arg(path, err));
+    return;
+  }
+  statusBar()->showMessage(tr("Exported %1").arg(path), 3000);
 }
 
 void MainWindow::onLayerAdd() {

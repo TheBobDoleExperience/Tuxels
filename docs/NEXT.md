@@ -4,65 +4,77 @@
 
 ## Immediately Next
 
-**S6 — PNG I/O + File menu (New / Open / Export As PNG)**
+**S7 — Brush engine + BrushTool**
 
-Currently `File → Open…` and `File → Export As PNG…` pop a placeholder QMessageBox
-("wired in the next step (S6)"). Replace those with real implementations.
+Goal: click-drag paints a round brush stroke onto the active pixel layer's
+`TuxImage`, with `[` / `]` adjusting size and `B` activating the brush tool.
+Mouse events originate in `CanvasView` and must be forwarded to the current
+tool; the tool owns the math.
 
 Files to create:
-- `/home/james/Tuxels/src/io/PngIO.h` — declarations:
-  - `std::optional<TuxImage> loadPng(const QString& path, QString* err = nullptr);`
-  - `bool savePng(const QString& path, const TuxImage& img, QString* err = nullptr);`
-  The API takes `QString` so callers can pass QFileDialog results directly; internals
-  use `QImage` via `QImageReader`/`QImageWriter`. Keeps `tuxels_core` Qt-free by
-  placing `PngIO` in the `tuxels` executable target (not `tuxels_core`).
-- `/home/james/Tuxels/src/io/PngIO.cpp` — conversions:
-  - Read: `QImage::Format_RGBA8888` → `Rgba32F` with `r = qRed()/255.f`, ..., `a = qAlpha()/255.f`. Treat input as sRGB but **do NOT linearize** for M0 (sRGB passthrough — noted in ARCHITECTURE.md §7).
-  - Write: `Rgba32F` → `QImage::Format_RGBA8888` with `std::clamp(v, 0.f, 1.f) * 255.f + 0.5f`.
-- Update `CMakeLists.txt`: add `src/io/PngIO.cpp` to the `tuxels` executable source list
-  (NOT to `tuxels_core` — keeps the core library Qt-free).
+- `/home/james/Tuxels/src/brush/RoundBrush.{h,cpp}` — brush parameters
+  (`diameter`, `hardness ∈ [0,1]`, `opacity ∈ [0,1]`, `flow ∈ [0,1]`,
+  `spacingRatio` default 0.1, `color : Rgba32F`). Precomputes a stamp
+  kernel: radial falloff where `hardness = 1` → hard-edged, `hardness = 0` →
+  smoothstep from 0 to diameter/2. Store as `std::vector<float>` sized
+  `diameter × diameter`, regenerate when size/hardness change.
+- `/home/james/Tuxels/src/brush/BrushEngine.{h,cpp}` — given a stroke path
+  (sequence of points), lay down stamps spaced `diameter × spacingRatio`
+  apart (min 1px). `applyStamp(TuxImage&, cx, cy)` writes into the target
+  image using straight-alpha "brush over surface" compositing:
+  `out = src.a*flow*kernel * color + (1 - src.a*flow*kernel) * surface`.
+  (Per-pixel, no premultiplication — TuxImage stores straight-alpha floats.)
+- `/home/james/Tuxels/src/tools/ToolBase.h` — minimal polymorphic base:
+  `virtual void pressEvent(...)`, `moveEvent`, `releaseEvent`. Tools receive
+  **image-space** coordinates, not widget-space — CanvasView converts.
+- `/home/james/Tuxels/src/tools/BrushTool.{h,cpp}` — owns a `RoundBrush`
+  and a `BrushEngine`. On press, begin stroke at active layer's image; on
+  move, extend stroke; on release, finalize.
 
-Wire in `MainWindow.cpp`:
-- `onFileOpen()`: `QFileDialog::getOpenFileName(this, tr("Open Image"), QString(), tr("PNG Images (*.png)"))`. On success, `loadPng` → replace current document with a new `Document` whose single PixelLayer is the loaded image. Refresh panel + canvas.
-- `onFileExport()`: `QFileDialog::getSaveFileName(this, tr("Export PNG"), QString(), tr("PNG (*.png)"))`. Call `compose(doc_->tree(), out)` where `out` is a fresh `TuxImage(width, height)`, then `savePng`.
-- `onFileNew()` already creates a blank document; no PNG I/O change needed, but ensure the new doc has at least one starter layer (already does — "Background").
+Integration:
+- Add `Tool` enum to `MainWindow` or a small `ToolState` singleton; default = BrushTool.
+- `CanvasView` keeps a `Tool*` pointer and forwards `mousePressEvent` etc.
+  Convert widget→image coords via the existing zoom/pan state.
+- Keyboard: `B` → activate brush; `[` / `]` decrement/increment `diameter`
+  by max(1, diameter/10). Shortcuts live in `MainWindow`.
+- After each brush stamp batch, call `canvas_->requestRecomposite()` (may
+  want incremental recompose later; M0 full-recompose is fine).
+- A tiny Tools dock or toolbar button isn't strictly required for M0; `B`
+  keybind + brush-always-on is acceptable.
 
-Tests (optional for M0):
-- `tests/test_png_io.cpp` — requires Qt for QImage, which would break the Qt-free core rule. **Skip** unless we extract a pure-C++ PNG helper. Manual verification via build + export is sufficient for M0.
+Tests:
+- `tests/test_brush.cpp` — linkable against `tuxels_core` (brush & engine
+  must stay Qt-free). Assertions:
+  - Stamp at exact pixel boundary writes solid center pixel with full alpha
+    when hardness=1, opacity=1, flow=1.
+  - Spacing: a stroke from (0,0) to (100,0) with diameter=10, spacing=0.1
+    produces ~100 stamps.
+  - Falloff: at diameter/2 the kernel value is 0 (hardness≥0), and at
+    center it is 1 (opacity/flow applied separately).
 
-Verification:
-```
-cmake --build build
-./build/tuxels                 # interactive: File > Export As PNG
-# or round-trip:
-./build/tuxels -platform offscreen   # headless instantiation
-```
-Open the exported PNG in an image viewer; should match the sample document
-(white bg, red rectangle, green disc with Multiply blend).
+Commit: "tools: round brush + brush engine + B/[/] shortcuts".
 
-Commit: "io: PNG load/save + File menu wiring".
+## Then — S8: Undo/redo with tile COW
 
-## Then — S7: Brush engine + BrushTool
-
-See plan file for detail. Will add `src/brush/{RoundBrush,BrushEngine}.{h,cpp}`
-and `src/tools/{ToolBase,BrushTool}.{h,cpp}`. CanvasView will need mouse-event
-forwarding to the active tool. Also need a Tools dock (simplest: a tiny toolbar
-with "Move" and "Brush" buttons) and `[` / `]` key bindings for brush size.
+`src/history/{Command,UndoStack,PaintCommand,LayerOpCommand}.{h,cpp}`. Paint
+commands snapshot `shared_ptr<Tile>` for each tile touched before the first
+stamp; undo swaps back. Layer-op commands capture metadata (name, blend,
+opacity, visibility, index). `Ctrl+Z` / `Ctrl+Shift+Z`.
 
 ## Future Steps (brief)
 
-- S8: `src/history/` — UndoStack + PaintCommand (tile-COW) + LayerOpCommand.
-- S9: Layer-mask UI wiring (Add Layer Mask menu item, mask thumb in LayerRowWidget, click-to-target, shift-click disable).
-- S10: Manual verify of all DoD items + tag `v0.0.1-m0`.
+- S9: Layer-mask UI (Add Layer Mask action, mask thumb in LayerRowWidget,
+  click-to-target, shift-click to disable).
+- S10: Manual end-to-end verify of every DoD bullet + tag `v0.0.1-m0`.
 
 See full detail in `/home/james/.claude/plans/modular-singing-teacup.md`.
 
 ## Cold-Start Checklist
 
-If you just booted and are resuming:
 1. `cat docs/STATUS.md` — current state.
 2. This file — what to do next.
 3. `cat docs/ARCHITECTURE.md` — don't re-derive decisions.
 4. `git log --oneline -10` — recent commits.
-5. `cmake --build build && ctest --test-dir build` — sanity-check current tree.
+5. `cmake --build build && ctest --test-dir build` — confirm green tree
+   (should be 47 passing tests as of S6).
 6. Pick up "Immediately Next" above.
