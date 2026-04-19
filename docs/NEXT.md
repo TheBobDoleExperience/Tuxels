@@ -4,10 +4,22 @@
 
 ## Immediately Next
 
-**S10 — End-to-end manual verification + tag v0.0.1-m0**
+**S10 — Finish manual verification, then tag v0.0.1-m0**
 
-Nine of ten M0 steps are done. One sweep through every DoD bullet remains,
-then tag.
+**Status (2026-04-20):** User began a GUI pass through the DoD and reported
+"I think it's good, but I need to spend more time testing." No issues filed
+yet. Nothing is tagged. **Do not start M1 until the user explicitly signs
+off** — they want more testing time on the built `./build/tuxels` binary
+before we commit to v0.0.1-m0.
+
+When the user returns: ask them whether they finished the walkthrough and
+whether anything needs fixing. If clean → tag `v0.0.1-m0`, append an
+"M0 complete" entry to `LOG.md` with the tagged SHA, flip S10 to ✅ in
+`STATUS.md`, then offer the M1 candidates below. If they found issues →
+fix first, re-test, then tag.
+
+Nine of ten M0 steps are done (through S9 commit `f133932`). One sweep
+through every DoD bullet remains, then tag.
 
 Walk through every DoD bullet in
 `/home/james/.claude/plans/modular-singing-teacup.md`:

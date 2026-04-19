@@ -19,7 +19,7 @@
 | S7 — Brush engine + BrushTool | ✅ done | 2026-04-20; 54 tests passing |
 | S8 — Undo/redo with tile COW | ✅ done | 2026-04-20; 59 tests passing |
 | S9 — Layer masks in UI | ✅ done | 2026-04-20; 59 tests passing |
-| S10 — Verify + tag v0.0.1-m0 | pending | |
+| S10 — Verify + tag v0.0.1-m0 | in_progress | 2026-04-20; user is mid-walkthrough, tag deferred until sign-off |
 
 ## What Works Right Now
 
