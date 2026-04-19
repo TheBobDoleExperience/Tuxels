@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <unordered_map>
 
 #include "core/Pixel.h"
 #include "core/Tile.h"
@@ -18,6 +19,9 @@ struct Rect {
 
 class TuxImage {
  public:
+  using TileSnapshot =
+      std::unordered_map<TileCoord, std::shared_ptr<Tile>, TileCoordHash>;
+
   TuxImage() = default;
   TuxImage(int w, int h) : width_(w), height_(h) {}
 
@@ -38,9 +42,38 @@ class TuxImage {
 
   void setPixel(int x, int y, Rgba32F c) {
     if (!inBounds(x, y)) return;
-    Tile* t = tiles_.getOrCreate(tileCoordForPixel(x, y));
+    Tile* t = tileForWrite(tileCoordForPixel(x, y));
     t->at(localInTile(x), localInTile(y)) = c;
   }
+
+  // Start copy-on-write recording. On first write to each tile during the
+  // recording window, the tile's current shared_ptr (or nullptr if absent)
+  // is captured and a clone replaces it — so the captured pointer stays
+  // frozen as the pre-change snapshot regardless of further mutation.
+  void beginRecord() {
+    recording_ = true;
+    before_.clear();
+  }
+
+  // End recording and hand back the pre-change and post-change tile
+  // pointers for every tile touched during the window. The returned maps
+  // reference the same TileCoords, making swap-based undo/redo trivial.
+  struct Recorded {
+    TileSnapshot before;
+    TileSnapshot after;
+  };
+  Recorded stopRecord() {
+    Recorded r;
+    r.before = std::move(before_);
+    before_.clear();
+    recording_ = false;
+    for (const auto& kv : r.before) {
+      r.after.emplace(kv.first, tiles_.sharedAt(kv.first));
+    }
+    return r;
+  }
+
+  bool recording() const noexcept { return recording_; }
 
   void fill(Rgba32F c) {
     if (width_ <= 0 || height_ <= 0) return;
@@ -73,9 +106,27 @@ class TuxImage {
   }
 
  private:
+  Tile* tileForWrite(TileCoord tc) {
+    if (recording_) {
+      auto it = before_.find(tc);
+      if (it == before_.end()) {
+        auto prev = tiles_.sharedAt(tc);
+        before_.emplace(tc, prev);
+        std::shared_ptr<Tile> cow =
+            prev ? prev->clone() : std::make_shared<Tile>();
+        Tile* raw = cow.get();
+        tiles_.set(tc, std::move(cow));
+        return raw;
+      }
+    }
+    return tiles_.getOrCreate(tc);
+  }
+
   int width_ = 0;
   int height_ = 0;
   TileStore tiles_;
+  bool recording_ = false;
+  TileSnapshot before_;
 };
 
 }  // namespace tuxels

@@ -13,6 +13,9 @@
 
 #include "compositor/compose.h"
 #include "core/Document.h"
+#include "history/LayerOpCommand.h"
+#include "history/PaintCommand.h"
+#include "history/UndoStack.h"
 #include "io/PngIO.h"
 #include "layers/PixelLayer.h"
 #include "tools/BrushTool.h"
@@ -26,6 +29,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   resize(1400, 900);
 
   brushTool_ = std::make_unique<BrushTool>();
+  undoStack_ = std::make_unique<UndoStack>(/*maxDepth=*/64);
 
   canvas_ = new CanvasView(this);
   canvas_->setTool(brushTool_.get());
@@ -64,7 +68,14 @@ void MainWindow::buildMenus() {
   quitAct->setShortcut(QKeySequence::Quit);
   connect(quitAct, &QAction::triggered, qApp, &QApplication::quit);
 
-  mb->addMenu(tr("&Edit"));
+  auto* editMenu = mb->addMenu(tr("&Edit"));
+  auto* undoAct = editMenu->addAction(tr("&Undo"));
+  undoAct->setShortcut(QKeySequence::Undo);
+  connect(undoAct, &QAction::triggered, this, &MainWindow::onEditUndo);
+  auto* redoAct = editMenu->addAction(tr("&Redo"));
+  redoAct->setShortcut(QKeySequence::Redo);
+  connect(redoAct, &QAction::triggered, this, &MainWindow::onEditRedo);
+
   mb->addMenu(tr("&Image"));
 
   auto* layerMenu = mb->addMenu(tr("&Layer"));
@@ -110,12 +121,28 @@ void MainWindow::buildDocks() {
           &MainWindow::onActiveLayerChanged);
   connect(layersPanel_, &LayersPanel::layerMutated, this,
           &MainWindow::onLayerPanelMutated);
+  connect(layersPanel_, &LayersPanel::visibilityChangeRequested, this,
+          &MainWindow::onLayerVisibilityChange);
+  connect(layersPanel_, &LayersPanel::blendChangeRequested, this,
+          &MainWindow::onLayerBlendChange);
+  connect(layersPanel_, &LayersPanel::opacityEditCommitted, this,
+          &MainWindow::onLayerOpacityCommit);
 }
 
 void MainWindow::setDocument(std::unique_ptr<Document> doc) {
   doc_ = std::move(doc);
+  if (undoStack_) undoStack_->clear();
   canvas_->setDocument(doc_.get());
   layersPanel_->setDocument(doc_.get());
+}
+
+void MainWindow::refreshAfterUndoRedo() {
+  if (!doc_) return;
+  if (doc_->activeLayerIndex() >= static_cast<int>(doc_->tree().size())) {
+    doc_->setActiveLayerIndex(static_cast<int>(doc_->tree().size()) - 1);
+  }
+  layersPanel_->refresh();
+  canvas_->requestRecomposite();
 }
 
 void MainWindow::populateSampleDocument() {
@@ -209,39 +236,120 @@ void MainWindow::onFileExport() {
 void MainWindow::onLayerAdd() {
   if (!doc_) return;
   const int n = static_cast<int>(doc_->tree().size()) + 1;
-  doc_->addBlankPixelLayer("Layer " + std::to_string(n));
-  layersPanel_->refresh();
-  canvas_->requestRecomposite();
+  const std::string name = "Layer " + std::to_string(n);
+  const int w = doc_->width();
+  const int h = doc_->height();
+  const LayerId id = doc_->nextLayerId();
+  const int prevActive = doc_->activeLayerIndex();
+
+  // Stash the layer ptr so that redo can rebuild its identity. We hold a
+  // shared_ptr owned by the command; when it's "attached" to the tree we
+  // transfer ownership in, and when detached (undone) we take it back.
+  auto stash = std::make_shared<std::unique_ptr<LayerBase>>();
+
+  auto doIt = [this, stash, name, w, h, id, prevActive]() mutable {
+    std::unique_ptr<LayerBase> layer;
+    if (*stash) {
+      layer = std::move(*stash);
+    } else {
+      auto px = std::make_unique<PixelLayer>(w, h);
+      px->id = id;
+      px->name = name;
+      layer = std::move(px);
+    }
+    const std::size_t insertIdx = doc_->tree().size();
+    doc_->tree().add(std::move(layer));
+    doc_->setActiveLayerIndex(static_cast<int>(insertIdx));
+    refreshAfterUndoRedo();
+    (void)prevActive;
+  };
+  auto undoIt = [this, stash, prevActive]() mutable {
+    const std::size_t lastIdx = doc_->tree().size() - 1;
+    *stash = doc_->tree().removeAt(lastIdx);
+    doc_->setActiveLayerIndex(prevActive);
+    refreshAfterUndoRedo();
+  };
+
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>("Add Layer",
+                                                    std::move(doIt),
+                                                    std::move(undoIt)));
 }
 
 void MainWindow::onLayerDelete() {
   if (!doc_) return;
-  int i = doc_->activeLayerIndex();
+  const int i = doc_->activeLayerIndex();
   if (i < 0 || static_cast<std::size_t>(i) >= doc_->tree().size()) return;
-  doc_->tree().removeAt(static_cast<std::size_t>(i));
-  doc_->setActiveLayerIndex(i - 1);
-  layersPanel_->refresh();
-  canvas_->requestRecomposite();
+  const std::size_t idx = static_cast<std::size_t>(i);
+  const int prevActive = i;
+  auto stash = std::make_shared<std::unique_ptr<LayerBase>>();
+
+  auto doIt = [this, stash, idx]() mutable {
+    *stash = doc_->tree().removeAt(idx);
+    const int newActive = std::min(static_cast<int>(doc_->tree().size()) - 1,
+                                   static_cast<int>(idx));
+    doc_->setActiveLayerIndex(newActive);
+    refreshAfterUndoRedo();
+  };
+  auto undoIt = [this, stash, idx, prevActive]() mutable {
+    if (!*stash) return;
+    doc_->tree().insertAt(idx, std::move(*stash));
+    doc_->setActiveLayerIndex(prevActive);
+    refreshAfterUndoRedo();
+  };
+
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>("Delete Layer",
+                                                    std::move(doIt),
+                                                    std::move(undoIt)));
 }
 
 void MainWindow::onLayerMoveUp() {
   if (!doc_) return;
-  int i = doc_->activeLayerIndex();
+  const int i = doc_->activeLayerIndex();
   if (i < 0 || i + 1 >= static_cast<int>(doc_->tree().size())) return;
-  doc_->tree().move(static_cast<std::size_t>(i), static_cast<std::size_t>(i + 1));
-  doc_->setActiveLayerIndex(i + 1);
-  layersPanel_->refresh();
-  canvas_->requestRecomposite();
+  const std::size_t from = static_cast<std::size_t>(i);
+  const std::size_t to = from + 1;
+
+  auto doIt = [this, from, to]() {
+    doc_->tree().move(from, to);
+    doc_->setActiveLayerIndex(static_cast<int>(to));
+    refreshAfterUndoRedo();
+  };
+  auto undoIt = [this, from, to]() {
+    doc_->tree().move(to, from);
+    doc_->setActiveLayerIndex(static_cast<int>(from));
+    refreshAfterUndoRedo();
+  };
+
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>("Move Layer Up",
+                                                    std::move(doIt),
+                                                    std::move(undoIt)));
 }
 
 void MainWindow::onLayerMoveDown() {
   if (!doc_) return;
-  int i = doc_->activeLayerIndex();
+  const int i = doc_->activeLayerIndex();
   if (i <= 0) return;
-  doc_->tree().move(static_cast<std::size_t>(i), static_cast<std::size_t>(i - 1));
-  doc_->setActiveLayerIndex(i - 1);
-  layersPanel_->refresh();
-  canvas_->requestRecomposite();
+  const std::size_t from = static_cast<std::size_t>(i);
+  const std::size_t to = from - 1;
+
+  auto doIt = [this, from, to]() {
+    doc_->tree().move(from, to);
+    doc_->setActiveLayerIndex(static_cast<int>(to));
+    refreshAfterUndoRedo();
+  };
+  auto undoIt = [this, from, to]() {
+    doc_->tree().move(to, from);
+    doc_->setActiveLayerIndex(static_cast<int>(from));
+    refreshAfterUndoRedo();
+  };
+
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>("Move Layer Down",
+                                                    std::move(doIt),
+                                                    std::move(undoIt)));
 }
 
 void MainWindow::onLayerPanelMutated() {
@@ -253,8 +361,79 @@ void MainWindow::onActiveLayerChanged() {
 }
 
 void MainWindow::onLayerPainted() {
-  // A brush stroke finished; update the layer thumbnail in the side panel.
+  if (!brushTool_ || !doc_) return;
+  auto info = brushTool_->takeLastStroke();
+  if (info.layer) {
+    auto cmd = std::make_unique<PaintCommand>(
+        &info.layer->image, std::move(info.recorded.before),
+        std::move(info.recorded.after), "Paint Stroke");
+    undoStack_->push(std::move(cmd));
+  }
   if (layersPanel_) layersPanel_->refresh();
+}
+
+void MainWindow::onEditUndo() {
+  if (!undoStack_) return;
+  undoStack_->undo();
+  refreshAfterUndoRedo();
+}
+
+void MainWindow::onEditRedo() {
+  if (!undoStack_) return;
+  undoStack_->redo();
+  refreshAfterUndoRedo();
+}
+
+void MainWindow::onLayerVisibilityChange(LayerBase* layer, bool oldVal, bool newVal) {
+  if (!layer || !undoStack_) return;
+  auto doIt = [this, layer, newVal]() {
+    layer->visible = newVal;
+    refreshAfterUndoRedo();
+  };
+  auto undoIt = [this, layer, oldVal]() {
+    layer->visible = oldVal;
+    refreshAfterUndoRedo();
+  };
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>("Toggle Visibility",
+                                                    std::move(doIt),
+                                                    std::move(undoIt)));
+}
+
+void MainWindow::onLayerBlendChange(LayerBase* layer, BlendMode oldMode,
+                                    BlendMode newMode) {
+  if (!layer || !undoStack_) return;
+  auto doIt = [this, layer, newMode]() {
+    layer->blend = newMode;
+    refreshAfterUndoRedo();
+  };
+  auto undoIt = [this, layer, oldMode]() {
+    layer->blend = oldMode;
+    refreshAfterUndoRedo();
+  };
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>("Change Blend Mode",
+                                                    std::move(doIt),
+                                                    std::move(undoIt)));
+}
+
+void MainWindow::onLayerOpacityCommit(LayerBase* layer, float oldVal, float newVal) {
+  if (!layer || !undoStack_) return;
+  auto doIt = [this, layer, newVal]() {
+    layer->opacity = newVal;
+    refreshAfterUndoRedo();
+  };
+  auto undoIt = [this, layer, oldVal]() {
+    layer->opacity = oldVal;
+    refreshAfterUndoRedo();
+  };
+  // The live-preview in LayerRowWidget::onOpacitySliderMoved has already
+  // applied `newVal` — don't re-apply in doIt() here; just register the
+  // reversible pair. Calling doIt() would be a no-op since newVal is the
+  // current value, but we skip it to avoid a redundant refresh.
+  undoStack_->push(std::make_unique<LayerOpCommand>("Change Opacity",
+                                                    std::move(doIt),
+                                                    std::move(undoIt)));
 }
 
 void MainWindow::onBrushSizeIncrease() {

@@ -78,6 +78,12 @@ void LayersPanel::refresh() {
     row->bindToLayer(layer);
     connect(row, &LayerRowWidget::layerMutated, this,
             &LayersPanel::onLayerRowMutated);
+    connect(row, &LayerRowWidget::visibilityChangeRequested, this,
+            &LayersPanel::visibilityChangeRequested);
+    connect(row, &LayerRowWidget::blendChangeRequested, this,
+            &LayersPanel::blendChangeRequested);
+    connect(row, &LayerRowWidget::opacityEditCommitted, this,
+            &LayersPanel::opacityEditCommitted);
 
     auto* item = new QListWidgetItem();
     item->setSizeHint(row->sizeHint());

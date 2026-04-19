@@ -3,6 +3,8 @@
 #include <QDockWidget>
 #include <vector>
 
+#include "compositor/BlendMode.h"
+
 class QListWidget;
 class QListWidgetItem;
 class QToolBar;
@@ -30,6 +32,10 @@ class LayersPanel : public QDockWidget {
   void activeLayerChanged();
   // Fired when any layer property edit requires a recomposite.
   void layerMutated();
+  // Fired with old→new so MainWindow can push an undoable command.
+  void visibilityChangeRequested(LayerBase* layer, bool oldVal, bool newVal);
+  void blendChangeRequested(LayerBase* layer, BlendMode oldMode, BlendMode newMode);
+  void opacityEditCommitted(LayerBase* layer, float oldVal, float newVal);
 
  private slots:
   void onCurrentRowChanged(int row);

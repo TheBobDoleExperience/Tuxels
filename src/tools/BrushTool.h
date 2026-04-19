@@ -26,8 +26,14 @@ class BrushTool : public ToolBase {
   struct StrokeInfo {
     PixelLayer* layer = nullptr;
     Rect bounds;
+    TuxImage::Recorded recorded;
   };
-  StrokeInfo lastStroke() const noexcept { return last_; }
+  const StrokeInfo& lastStroke() const noexcept { return last_; }
+  StrokeInfo takeLastStroke() {
+    StrokeInfo out = std::move(last_);
+    last_ = {};
+    return out;
+  }
 
  private:
   RoundBrush brush_;

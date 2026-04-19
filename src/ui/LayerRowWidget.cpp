@@ -72,7 +72,11 @@ LayerRowWidget::LayerRowWidget(QWidget* parent) : QWidget(parent) {
   connect(blendCombo_, qOverload<int>(&QComboBox::currentIndexChanged),
           this, &LayerRowWidget::onBlendChanged);
   connect(opacitySlider_, &QSlider::valueChanged,
-          this, &LayerRowWidget::onOpacityChanged);
+          this, &LayerRowWidget::onOpacitySliderMoved);
+  connect(opacitySlider_, &QSlider::sliderPressed,
+          this, &LayerRowWidget::onOpacitySliderPressed);
+  connect(opacitySlider_, &QSlider::sliderReleased,
+          this, &LayerRowWidget::onOpacitySliderReleased);
 }
 
 void LayerRowWidget::bindToLayer(LayerBase* layer) {
@@ -108,22 +112,39 @@ void LayerRowWidget::setActive(bool active) {
 
 void LayerRowWidget::onVisibilityToggled(bool checked) {
   if (blockSignals_ || !layer_) return;
-  layer_->visible = checked;
-  emit layerMutated(layer_);
+  const bool oldVal = layer_->visible;
+  if (oldVal == checked) return;
+  emit visibilityChangeRequested(layer_, oldVal, checked);
 }
 
 void LayerRowWidget::onBlendChanged(int index) {
   if (blockSignals_ || !layer_) return;
   if (index < 0 || static_cast<std::size_t>(index) >= kBlendList.size()) return;
-  layer_->blend = kBlendList[static_cast<std::size_t>(index)];
+  const BlendMode oldMode = layer_->blend;
+  const BlendMode newMode = kBlendList[static_cast<std::size_t>(index)];
+  if (oldMode == newMode) return;
+  emit blendChangeRequested(layer_, oldMode, newMode);
+}
+
+void LayerRowWidget::onOpacitySliderMoved(int sliderValue) {
+  opacityValue_->setText(QStringLiteral("%1%").arg(sliderValue));
+  if (blockSignals_ || !layer_) return;
+  // Live-update the layer so the canvas previews the change while dragging.
+  // The undo entry is committed on sliderReleased, below.
+  layer_->opacity = static_cast<float>(sliderValue) / 100.f;
   emit layerMutated(layer_);
 }
 
-void LayerRowWidget::onOpacityChanged(int sliderValue) {
-  opacityValue_->setText(QStringLiteral("%1%").arg(sliderValue));
-  if (blockSignals_ || !layer_) return;
-  layer_->opacity = static_cast<float>(sliderValue) / 100.f;
-  emit layerMutated(layer_);
+void LayerRowWidget::onOpacitySliderPressed() {
+  if (!layer_) return;
+  opacityBeforeDrag_ = layer_->opacity;
+}
+
+void LayerRowWidget::onOpacitySliderReleased() {
+  if (!layer_) return;
+  const float newVal = layer_->opacity;
+  if (std::fabs(newVal - opacityBeforeDrag_) < 1e-4f) return;
+  emit opacityEditCommitted(layer_, opacityBeforeDrag_, newVal);
 }
 
 void LayerRowWidget::rebuildThumbnail() {

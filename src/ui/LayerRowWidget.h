@@ -3,6 +3,8 @@
 #include <QWidget>
 #include <cstdint>
 
+#include "compositor/BlendMode.h"
+
 class QCheckBox;
 class QComboBox;
 class QLabel;
@@ -28,19 +30,26 @@ class LayerRowWidget : public QWidget {
 
  signals:
   // Emitted after a user interaction changes the bound layer. The listener
-  // should request recomposite + undo-stack recording.
+  // should request recomposite. Undo-stack recording happens via the
+  // specific old→new signals below where the previous value is known.
   void layerMutated(LayerBase* layer);
+  void visibilityChangeRequested(LayerBase* layer, bool oldVal, bool newVal);
+  void blendChangeRequested(LayerBase* layer, BlendMode oldMode, BlendMode newMode);
+  void opacityEditCommitted(LayerBase* layer, float oldVal, float newVal);
 
  private slots:
   void onVisibilityToggled(bool checked);
   void onBlendChanged(int index);
-  void onOpacityChanged(int sliderValue);
+  void onOpacitySliderMoved(int sliderValue);
+  void onOpacitySliderPressed();
+  void onOpacitySliderReleased();
 
  private:
   void rebuildThumbnail();
 
   LayerBase* layer_ = nullptr;
   bool blockSignals_ = false;
+  float opacityBeforeDrag_ = 1.f;
 
   QCheckBox* visCheck_ = nullptr;
   QLabel* thumb_ = nullptr;
