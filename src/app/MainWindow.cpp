@@ -9,11 +9,13 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QStatusBar>
+#include <algorithm>
 
 #include "compositor/compose.h"
 #include "core/Document.h"
 #include "io/PngIO.h"
 #include "layers/PixelLayer.h"
+#include "tools/BrushTool.h"
 #include "ui/CanvasView.h"
 #include "ui/LayersPanel.h"
 
@@ -23,7 +25,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   setWindowTitle("Tuxels");
   resize(1400, 900);
 
+  brushTool_ = std::make_unique<BrushTool>();
+
   canvas_ = new CanvasView(this);
+  canvas_->setTool(brushTool_.get());
+  connect(canvas_, &CanvasView::layerPainted, this, &MainWindow::onLayerPainted);
   setCentralWidget(canvas_);
 
   buildDocks();
@@ -74,6 +80,18 @@ void MainWindow::buildMenus() {
   mb->addMenu(tr("&View"));
   mb->addMenu(tr("&Window"));
   mb->addMenu(tr("&Help"));
+
+  // Brush-size keyboard shortcuts live on the main window so they work
+  // regardless of which panel has focus.
+  auto* sizeUp = new QAction(this);
+  sizeUp->setShortcut(QKeySequence(tr("]")));
+  connect(sizeUp, &QAction::triggered, this, &MainWindow::onBrushSizeIncrease);
+  addAction(sizeUp);
+
+  auto* sizeDown = new QAction(this);
+  sizeDown->setShortcut(QKeySequence(tr("[")));
+  connect(sizeDown, &QAction::triggered, this, &MainWindow::onBrushSizeDecrease);
+  addAction(sizeDown);
 }
 
 void MainWindow::buildDocks() {
@@ -232,6 +250,29 @@ void MainWindow::onLayerPanelMutated() {
 
 void MainWindow::onActiveLayerChanged() {
   // Placeholder for future painting-target updates.
+}
+
+void MainWindow::onLayerPainted() {
+  // A brush stroke finished; update the layer thumbnail in the side panel.
+  if (layersPanel_) layersPanel_->refresh();
+}
+
+void MainWindow::onBrushSizeIncrease() {
+  if (!brushTool_) return;
+  const int d = brushTool_->brush().diameter();
+  const int step = std::max(1, d / 10);
+  brushTool_->brush().setDiameter(d + step);
+  statusBar()->showMessage(
+      tr("Brush size: %1").arg(brushTool_->brush().diameter()), 1500);
+}
+
+void MainWindow::onBrushSizeDecrease() {
+  if (!brushTool_) return;
+  const int d = brushTool_->brush().diameter();
+  const int step = std::max(1, d / 10);
+  brushTool_->brush().setDiameter(d - step);
+  statusBar()->showMessage(
+      tr("Brush size: %1").arg(brushTool_->brush().diameter()), 1500);
 }
 
 }  // namespace tuxels

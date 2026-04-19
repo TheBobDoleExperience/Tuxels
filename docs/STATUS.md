@@ -16,8 +16,8 @@
 | S4 — Layers + compositor + 13 blend modes | ✅ done | 2026-04-20; 43 unit tests pass |
 | S5 — UI shell: CanvasView + LayersPanel | ✅ done | 2026-04-20; window hosts sample 3-layer doc |
 | S6 — PNG I/O + File menu | ✅ done | 2026-04-20; PngIO round-trip unit tests pass |
-| S7 — Brush engine + BrushTool | in_progress | |
-| S8 — Undo/redo with tile COW | pending | |
+| S7 — Brush engine + BrushTool | ✅ done | 2026-04-20; 54 tests passing |
+| S8 — Undo/redo with tile COW | in_progress | |
 | S9 — Layer masks in UI | pending | |
 | S10 — Verify + tag v0.0.1-m0 | pending | |
 
@@ -29,6 +29,7 @@
 - Canvas shows a composited 1024×768 sample document (white bg, red rectangle, green disc blended Multiply); checkerboard around canvas; Ctrl+wheel zoom, middle/shift+drag pan.
 - Layers dock (right) lists layers top-down with per-row visibility toggle, thumbnail, name, blend-mode combo, and opacity slider. Add/Delete/Up/Down via toolbar or Layer menu. Blend-mode or opacity changes trigger recomposite immediately.
 - `File → Open…` imports an 8-bit PNG as a single pixel layer; `File → Export As PNG…` composites the document and writes an 8-bit sRGB PNG. PngIO round-trip verified in `test_png_io`.
+- Click-drag on the canvas paints a round brush onto the active pixel layer. Brush kernel has hard/soft falloff (hardness ∈ [0,1]) and honors opacity × flow per stamp; spacing is diameter × 10%. `[` / `]` shrink/grow the brush diameter; status bar reports new size. Layer thumbnails refresh on stroke end.
 
 ## What Is Broken / Known Issues
 

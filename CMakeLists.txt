@@ -23,6 +23,9 @@ add_compile_options(-Wall -Wextra -Wpedantic -Werror=return-type)
 set(TUXELS_CORE_SOURCES
   src/layers/PixelLayer.cpp
   src/compositor/compose.cpp
+  src/brush/RoundBrush.cpp
+  src/brush/BrushEngine.cpp
+  src/tools/BrushTool.cpp
 )
 
 add_library(tuxels_core STATIC ${TUXELS_CORE_SOURCES})
@@ -68,6 +71,7 @@ endfunction()
 tuxels_add_test(test_tile)
 tuxels_add_test(test_blend_modes)
 tuxels_add_test(test_compositor)
+tuxels_add_test(test_brush)
 
 add_executable(test_png_io tests/test_png_io.cpp)
 set_target_properties(test_png_io PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)

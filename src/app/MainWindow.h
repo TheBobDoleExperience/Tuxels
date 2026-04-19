@@ -5,6 +5,7 @@
 
 namespace tuxels {
 
+class BrushTool;
 class CanvasView;
 class Document;
 class LayersPanel;
@@ -26,6 +27,9 @@ class MainWindow : public QMainWindow {
   void onLayerMoveDown();
   void onLayerPanelMutated();
   void onActiveLayerChanged();
+  void onLayerPainted();
+  void onBrushSizeIncrease();
+  void onBrushSizeDecrease();
 
  private:
   void buildMenus();
@@ -34,6 +38,7 @@ class MainWindow : public QMainWindow {
   void populateSampleDocument();
 
   std::unique_ptr<Document> doc_;
+  std::unique_ptr<BrushTool> brushTool_;
   CanvasView* canvas_ = nullptr;
   LayersPanel* layersPanel_ = nullptr;
 };

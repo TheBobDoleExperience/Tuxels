@@ -9,6 +9,7 @@
 
 #include "compositor/compose.h"
 #include "core/Document.h"
+#include "tools/ToolBase.h"
 
 namespace tuxels {
 
@@ -157,6 +158,15 @@ void CanvasView::mousePressEvent(QMouseEvent* e) {
     e->accept();
     return;
   }
+  if (tool_ && doc_ && e->button() == Qt::LeftButton) {
+    const QPointF ip = (QPointF(e->pos()) - pan_) / zoom_;
+    tool_->press(*doc_, static_cast<float>(ip.x()),
+                 static_cast<float>(ip.y()), MouseButton::Left);
+    painting_ = true;
+    requestRecomposite();
+    e->accept();
+    return;
+  }
   QWidget::mousePressEvent(e);
 }
 
@@ -168,6 +178,14 @@ void CanvasView::mouseMoveEvent(QMouseEvent* e) {
     e->accept();
     return;
   }
+  if (painting_ && tool_ && doc_) {
+    const QPointF ip = (QPointF(e->pos()) - pan_) / zoom_;
+    tool_->move(*doc_, static_cast<float>(ip.x()),
+                static_cast<float>(ip.y()));
+    requestRecomposite();
+    e->accept();
+    return;
+  }
   QWidget::mouseMoveEvent(e);
 }
 
@@ -176,6 +194,16 @@ void CanvasView::mouseReleaseEvent(QMouseEvent* e) {
       (e->button() == Qt::MiddleButton || e->button() == Qt::LeftButton)) {
     panning_ = false;
     unsetCursor();
+    e->accept();
+    return;
+  }
+  if (painting_ && tool_ && doc_ && e->button() == Qt::LeftButton) {
+    const QPointF ip = (QPointF(e->pos()) - pan_) / zoom_;
+    tool_->release(*doc_, static_cast<float>(ip.x()),
+                   static_cast<float>(ip.y()), MouseButton::Left);
+    painting_ = false;
+    requestRecomposite();
+    emit layerPainted();
     e->accept();
     return;
   }
