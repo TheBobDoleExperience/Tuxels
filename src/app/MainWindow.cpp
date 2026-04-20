@@ -14,6 +14,7 @@
 #include "compositor/compose.h"
 #include "core/Document.h"
 #include "core/SelectionMask.h"
+#include "history/CropCommand.h"
 #include "history/LayerOpCommand.h"
 #include "history/PaintCommand.h"
 #include "history/SelectionCommand.h"
@@ -23,6 +24,7 @@
 #include "layers/PixelLayer.h"
 #include "tools/BrushTool.h"
 #include "tools/BucketTool.h"
+#include "tools/CropTool.h"
 #include "tools/MagicWandTool.h"
 #include "tools/MarqueeTool.h"
 #include "ui/CanvasView.h"
@@ -39,6 +41,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   marqueeTool_ = std::make_unique<MarqueeTool>();
   bucketTool_ = std::make_unique<BucketTool>();
   wandTool_ = std::make_unique<MagicWandTool>();
+  cropTool_ = std::make_unique<CropTool>();
   undoStack_ = std::make_unique<UndoStack>(/*maxDepth=*/64);
 
   canvas_ = new CanvasView(this);
@@ -166,6 +169,12 @@ void MainWindow::buildMenus() {
   connect(pickWand, &QAction::triggered, this,
           [this]() { setActiveTool(ToolId::MagicWand); });
   addAction(pickWand);
+
+  auto* pickCrop = new QAction(this);
+  pickCrop->setShortcut(QKeySequence(tr("C")));
+  connect(pickCrop, &QAction::triggered, this,
+          [this]() { setActiveTool(ToolId::Crop); });
+  addAction(pickCrop);
 }
 
 void MainWindow::buildDocks() {
@@ -499,6 +508,23 @@ void MainWindow::onLayerPainted() {
       if (canvas_) canvas_->refreshSelectionOverlay();
     }
   }
+  // Crop commit. The CropCommand constructor snapshots the document, then
+  // applies the crop in place; we only have to push it onto the stack and
+  // refresh the UI. Dimensions change, so do a full recompose + rebuild the
+  // ants overlay (the selection may have been cropped to null or shrunk).
+  if (cropTool_) {
+    if (auto commit = cropTool_->takeCommit()) {
+      undoStack_->push(std::make_unique<CropCommand>(doc_.get(), commit->rect));
+      if (canvas_) {
+        canvas_->requestRecomposite();
+        canvas_->refreshSelectionOverlay();
+      }
+      statusBar()->showMessage(tr("Cropped to %1×%2")
+                                   .arg(commit->rect.w)
+                                   .arg(commit->rect.h),
+                               2000);
+    }
+  }
   if (layersPanel_) layersPanel_->refresh();
 }
 
@@ -517,6 +543,9 @@ void MainWindow::setActiveTool(ToolId id) {
       break;
     case ToolId::MagicWand:
       if (canvas_) canvas_->setTool(wandTool_.get());
+      break;
+    case ToolId::Crop:
+      if (canvas_) canvas_->setTool(cropTool_.get());
       break;
   }
   if (toolsPanel_) toolsPanel_->setActiveTool(id);

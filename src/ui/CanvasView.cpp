@@ -13,7 +13,6 @@
 #include "compositor/compose.h"
 #include "core/Document.h"
 #include "core/SelectionMask.h"
-#include "tools/MarqueeTool.h"
 #include "tools/ToolBase.h"
 
 namespace tuxels {
@@ -353,23 +352,22 @@ void CanvasView::paintEvent(QPaintEvent*) {
     painter.restore();
   }
 
-  // Rubber-band rectangle while a MarqueeTool drag is in progress.
+  // Rubber-band rectangle while a tool with a live-rect drag is in progress
+  // (marquee and crop both surface theirs via ToolBase::liveRect()).
   if (tool_) {
-    if (auto* marquee = dynamic_cast<MarqueeTool*>(tool_)) {
-      if (auto r = marquee->liveRect()) {
-        painter.setRenderHint(QPainter::Antialiasing, false);
-        QPointF tl = canvasToWidget(QPointF(r->x, r->y));
-        QPointF br2 = canvasToWidget(QPointF(r->right(), r->bottom()));
-        QRectF rubber(tl, br2);
-        QPen black(QColor(0, 0, 0, 220), 1.0);
-        painter.setPen(black);
-        painter.setBrush(Qt::NoBrush);
-        painter.drawRect(rubber);
-        QPen white(QColor(255, 255, 255, 240), 1.0);
-        white.setStyle(Qt::DashLine);
-        painter.setPen(white);
-        painter.drawRect(rubber);
-      }
+    if (auto r = tool_->liveRect()) {
+      painter.setRenderHint(QPainter::Antialiasing, false);
+      QPointF tl = canvasToWidget(QPointF(r->x, r->y));
+      QPointF br2 = canvasToWidget(QPointF(r->right(), r->bottom()));
+      QRectF rubber(tl, br2);
+      QPen black(QColor(0, 0, 0, 220), 1.0);
+      painter.setPen(black);
+      painter.setBrush(Qt::NoBrush);
+      painter.drawRect(rubber);
+      QPen white(QColor(255, 255, 255, 240), 1.0);
+      white.setStyle(Qt::DashLine);
+      painter.setPen(white);
+      painter.drawRect(rubber);
     }
   }
 
@@ -432,11 +430,9 @@ void CanvasView::mousePressEvent(QMouseEvent* e) {
     } else {
       requestRecomposite();
     }
-    // Also invalidate the rubber-band rect region if the tool is a marquee
-    // (press may set a 1-px live rect that needs drawing).
-    if (auto* m = dynamic_cast<MarqueeTool*>(tool_)) {
-      if (auto r = m->liveRect()) update(widgetRectForPixels(*r));
-    }
+    // Also invalidate the rubber-band rect region if the tool now has a
+    // live rect (press may set a 1-px rect that needs drawing).
+    if (auto r = tool_->liveRect()) update(widgetRectForPixels(*r));
     e->accept();
     return;
   }
@@ -458,8 +454,7 @@ void CanvasView::mouseMoveEvent(QMouseEvent* e) {
   if (painting_ && tool_ && doc_) {
     // Capture the rubber-band rect BEFORE the move so we can invalidate
     // its old widget-space extent; then compute a new one after.
-    std::optional<Rect> preRect;
-    if (auto* m = dynamic_cast<MarqueeTool*>(tool_)) preRect = m->liveRect();
+    std::optional<Rect> preRect = tool_->liveRect();
 
     const QPointF ip = (QPointF(e->pos()) - pan_) / zoom_;
     tool_->move(*doc_, static_cast<float>(ip.x()),
@@ -467,10 +462,8 @@ void CanvasView::mouseMoveEvent(QMouseEvent* e) {
     const Rect dirty = tool_->takeDirtyRect();
     if (!dirty.isEmpty()) requestRecomposite(dirty);
 
-    if (auto* m = dynamic_cast<MarqueeTool*>(tool_)) {
-      if (preRect) update(widgetRectForPixels(*preRect));
-      if (auto r = m->liveRect()) update(widgetRectForPixels(*r));
-    }
+    if (preRect) update(widgetRectForPixels(*preRect));
+    if (auto r = tool_->liveRect()) update(widgetRectForPixels(*r));
     e->accept();
     return;
   }
@@ -502,8 +495,7 @@ void CanvasView::mouseReleaseEvent(QMouseEvent* e) {
   }
   moveBrushCursorTo(QPointF(e->pos()));
   if (painting_ && tool_ && doc_ && e->button() == Qt::LeftButton) {
-    std::optional<Rect> preRect;
-    if (auto* m = dynamic_cast<MarqueeTool*>(tool_)) preRect = m->liveRect();
+    std::optional<Rect> preRect = tool_->liveRect();
 
     const QPointF ip = (QPointF(e->pos()) - pan_) / zoom_;
     tool_->release(*doc_, static_cast<float>(ip.x()),

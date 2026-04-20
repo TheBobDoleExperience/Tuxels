@@ -31,7 +31,7 @@ class MarqueeTool : public ToolBase {
 
   // Live rubber-band rectangle in document pixel coordinates, during a
   // drag. Empty when not dragging.
-  std::optional<Rect> liveRect() const noexcept {
+  std::optional<Rect> liveRect() const override {
     if (!dragging_) return std::nullopt;
     return computeRect();
   }

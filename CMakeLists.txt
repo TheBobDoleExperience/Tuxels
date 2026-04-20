@@ -27,8 +27,10 @@ set(TUXELS_CORE_SOURCES
   src/brush/RoundBrush.cpp
   src/brush/BrushEngine.cpp
   src/fill/FloodFill.cpp
+  src/history/CropCommand.cpp
   src/tools/BrushTool.cpp
   src/tools/BucketTool.cpp
+  src/tools/CropTool.cpp
   src/tools/MagicWandTool.cpp
   src/tools/MarqueeTool.cpp
 )
@@ -82,6 +84,7 @@ tuxels_add_test(test_brush)
 tuxels_add_test(test_undo)
 tuxels_add_test(test_selection)
 tuxels_add_test(test_fill)
+tuxels_add_test(test_crop)
 
 add_executable(test_png_io tests/test_png_io.cpp)
 set_target_properties(test_png_io PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)

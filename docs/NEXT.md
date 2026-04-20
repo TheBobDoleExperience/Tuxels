@@ -4,53 +4,43 @@
 
 ## Immediately Next
 
-**M1 — scope & plan.** M0 shipped as `v0.0.1-m0` on 2026-04-20. User has
-asked for, in their own words:
+**M1 — S6: `.txl` native file format v1.** S1–S5 all shipped 2026-04-20.
+117 tests passing. Next up: design and implement Tuxels' proprietary file
+format that round-trips document + layers + masks + selection.
 
-1. "More tools added to the tool bar (cropping, bucket tool, smart
-   selection, etc.)"
-2. "Tuxels should have its own proprietary file type for non-destructive
-   editing (I was thinking `.txl`)"
-3. PSD support "can come later (or whenever you think it's best to
-   incorporate it into the workflow)"
+Key decisions to make at S6 start:
 
-The sequencing recommendation waiting for user confirmation: do a
-**Selection & Fill** milestone (M1) before the native file format, because
-crop / bucket / smart-select all sit on a selection-mask data structure
-that must exist first. The file format then serializes Document + layers
-+ masks + the new selection primitives in one shot, which means we design
-`.txl` after the model it has to persist is stable.
+1. **Container format**: ZIP-of-binaries (familiar, diff-friendly, but
+   platform dependencies) vs custom chunked binary (full control, but
+   more code). SCOPE.md hasn't locked this in — pick at S6 kickoff.
+2. **Tile storage**: preserve the tile-sparse `TuxImage` layout
+   directly (store only present tiles, each with `(tx, ty)` header) vs
+   a flat image per layer. Tile-sparse matches how TuxImage already
+   works and keeps large mostly-empty masks cheap on disk.
+3. **Compression**: zstd for the tile payloads is the default.
+4. **Version field**: include in the top-level header so future readers
+   can branch. Bump on any tile-format or layer-kind change.
 
-Proposed M1 skeleton (user to confirm / redirect):
+Payload to serialize (derived from current Document model):
 
-- **S1** — Selection model: `SelectionMask` type (1-channel float image),
-  `Document::selection()` accessor, compositor + brush engine respect
-  selection alpha (clip paint to selection on write).
-- **S2** — Rectangular marquee tool (Add / Subtract / Intersect
-  modifiers), marching-ants overlay in CanvasView (timer-driven dashed
-  outline of selection edge).
-- **S3** — Bucket fill tool (scanline flood fill + tolerance slider;
-  respects active selection; fills with foreground color).
-- **S4** — Magic wand (color-range flood select with tolerance; builds
-  selection, same tool plumbing as bucket).
-- **S5** — Crop tool (marquee-based canvas resize; undoable by storing
-  old dimensions + tile map).
-- **S6** — `.txl` native format: writer + reader. Contains doc
-  dimensions, per-layer kind/name/visibility/opacity/blend/mask, tile
-  bitmap per layer (stored sparse, matching TuxImage's internal layout),
-  current selection, future-compat version field. ZIP-of-binaries or
-  custom chunked binary — decide at S6 start.
-- **S7** — Verify + tag `v0.1.0-m1`. DoD walkthrough.
+- Document dimensions + active layer index + paint target
+- Per-layer: id, name, kind (PixelLayer-only for v1), visibility,
+  opacity, blend mode (13 enum values), attached mask (bool + tiles +
+  enabled), PixelLayer tiles
+- Selection mask (optional) — same tile layout, R-channel only
 
-M2 candidate: **PSD I/O** (start read-only; full PSD write later).
+## When Starting S6
 
-## When User Confirms M1 Plan
-
-1. Write milestone plan into `/home/james/.claude/plans/` (pick a fresh
-   codename).
-2. Create tasks #1..#7 in the task list, one per step.
-3. Start S1 (selection model). Keep 62-test bar green; add tests per
-   step.
+1. Decide container + compression. Write the choice into
+   `ARCHITECTURE.md` before coding.
+2. Add `src/io/TxlIO.{h,cpp}` with `saveTxl` / `loadTxl` mirrors of
+   PngIO.
+3. Add round-trip tests in `tests/test_txl_io.cpp` (Qt-free — keep in
+   `tuxels_core` if the format writer is pure C++; else split like
+   PngIO).
+4. Wire `File → Save As…` / `File → Open…` to dispatch on extension
+   (.txl vs .png).
+5. Mark S6 done in STATUS.md, then S7 (tag v0.1.0-m1).
 
 ## Cold-Start Checklist
 
@@ -59,5 +49,5 @@ M2 candidate: **PSD I/O** (start read-only; full PSD write later).
 3. `cat docs/ARCHITECTURE.md` — don't re-derive decisions.
 4. `git log --oneline -10` — recent commits.
 5. `cmake --build build && ctest --test-dir build` — confirm green tree
-   (expect 62 passing tests as of v0.0.1-m0).
+   (expect 117 passing tests as of M1-S5).
 6. Pick up "Immediately Next" above.

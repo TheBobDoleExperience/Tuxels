@@ -23,6 +23,13 @@ class Document {
   int width() const noexcept { return width_; }
   int height() const noexcept { return height_; }
 
+  // Used by crop/resize operations. Does not touch layers — callers are
+  // responsible for resizing/moving each layer's TuxImage to match.
+  void setSize(int w, int h) noexcept {
+    width_ = w;
+    height_ = h;
+  }
+
   LayerTree& tree() noexcept { return tree_; }
   const LayerTree& tree() const noexcept { return tree_; }
 

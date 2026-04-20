@@ -7,6 +7,7 @@ enum class ToolId {
   Marquee,
   Bucket,
   MagicWand,
+  Crop,
 };
 
 }  // namespace tuxels

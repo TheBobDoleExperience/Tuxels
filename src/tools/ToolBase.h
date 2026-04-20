@@ -45,6 +45,11 @@ class ToolBase {
   // modifier.
   virtual bool consumesShiftClick() const { return false; }
 
+  // Live rubber-band rectangle in document pixel coordinates, during a
+  // drag. nullopt when no drag is active or the tool doesn't have one.
+  // Rendered by CanvasView as a dashed outline on every mouse event.
+  virtual std::optional<Rect> liveRect() const { return std::nullopt; }
+
   // Called by CanvasView before each press/move/release so the tool can
   // branch on current modifier state (e.g. marquee Add/Subtract/Intersect).
   void setModifiers(int flags) noexcept { modifiers_ = flags; }
