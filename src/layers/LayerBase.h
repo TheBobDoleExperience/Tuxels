@@ -24,9 +24,22 @@ class LayerBase {
   BlendMode blend = BlendMode::Normal;
   std::unique_ptr<LayerMask> mask;
 
+  // Doc-coord of the layer's (0, 0) pixel. Added M2-S0 so layers can live
+  // anywhere on the document grid (Place Image, Move, Free Transform) without
+  // forcing the layer's backing image to be doc-sized. Masks share their
+  // owning layer's origin and dimensions. Zero origin behaves identically to
+  // the pre-origin code path, keeping M1 blank-layers-at-(0,0) untouched.
+  int originX = 0;
+  int originY = 0;
+
   // Render this layer's contribution for one tile. Writes kTilePx*kTilePx
   // Rgba32F values into `out`. Returns true if any non-transparent pixel was
   // written; false means the tile is empty and the compositor can skip it.
+  //
+  // M2-S0: output is in doc-coord tile space. Implementations translate
+  // doc→layer coords via `originX/originY`, and fold any enabled mask into
+  // the output alpha (absent mask tiles default to 1.0 = reveal). This lets
+  // `compose()` stay origin-agnostic.
   virtual bool renderTile(TileCoord tc, Rgba32F* out) const = 0;
 
   // Dissolve noise seed — derived from layer id so patterns are stable.

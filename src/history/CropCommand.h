@@ -35,6 +35,8 @@ class CropCommand : public Command {
  private:
   struct LayerEntry {
     LayerId id = 0;
+    int originX = 0;
+    int originY = 0;
     TuxImage image;
     bool hasMask = false;
     TuxImage maskImage;

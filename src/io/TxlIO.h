@@ -8,16 +8,22 @@ namespace tuxels {
 
 class Document;
 
-// Tuxels native file format (v1). Uncompressed little-endian binary that
+// Tuxels native file format (v2). Uncompressed little-endian binary that
 // round-trips everything the editor model currently owns: document
 // dimensions, layer tree (with id / name / visibility / opacity / blend
-// mode / paint-target / active-layer), each PixelLayer's tile-sparse
-// TuxImage, each attached LayerMask, and the current SelectionMask.
+// mode / origin / dimensions / paint-target / active-layer), each
+// PixelLayer's tile-sparse TuxImage, each attached LayerMask, and the
+// current SelectionMask.
+//
+// v2 (M2-S0) adds per-layer LayerWidth, LayerHeight, OriginX, OriginY so
+// layers can live anywhere on the doc grid with their own backing-image
+// dimensions (Place Image, Move, Free Transform). v1 files remain readable
+// — they're loaded with origin=(0,0) and layer dims == doc dims.
 //
 // Format layout (header + repeated layer chunks + optional selection chunk):
 //
 //   Magic         : char[8]  = "TUXELS\\x01\\x00"
-//   Version       : uint32   = 1
+//   Version       : uint32   = 2
 //   Flags         : uint32   = 0  (reserved; readers must error on unknown)
 //   DocWidth      : uint32
 //   DocHeight     : uint32
@@ -35,6 +41,10 @@ class Document;
 //     HasMask       : uint8
 //     Opacity       : float32
 //     BlendMode     : uint32   (BlendMode enum ordinal)
+//     LayerWidth    : uint32   (v2+; absent in v1 — defaults to DocWidth)
+//     LayerHeight   : uint32   (v2+; absent in v1 — defaults to DocHeight)
+//     OriginX       : int32    (v2+; absent in v1 — defaults to 0)
+//     OriginY       : int32    (v2+; absent in v1 — defaults to 0)
 //     NameLen       : uint32
 //     Name          : utf-8 bytes [NameLen]
 //     NumImageTiles : uint32
@@ -51,8 +61,8 @@ class Document;
 //   Ty : int32
 //   Data : Rgba32F[kTilePx * kTilePx]   (raw host-order floats; 1 MiB)
 //
-// No compression in v1 — float payloads compress well with deflate/zstd but
-// the bring-up priority is correctness. `Flags` lets a v2 reader branch on
+// No compression — float payloads compress well with deflate/zstd but the
+// bring-up priority is correctness. `Flags` lets a future version branch on
 // a compression bit without breaking the magic or header layout.
 bool saveTxl(const std::string& path, const Document& doc,
              std::string* err = nullptr);

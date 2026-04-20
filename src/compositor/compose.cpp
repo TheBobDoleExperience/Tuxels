@@ -27,13 +27,13 @@ void composeTileRange(const LayerTree& tree, TuxImage& out, int tx0, int ty0,
         std::fill(layerTile.begin(), layerTile.end(), Rgba32F::transparent());
         if (!layer->renderTile(tc, layerTile.data())) continue;
 
-        const bool hasMask = layer->mask && layer->mask->enabled;
-        const Tile* maskTile =
-            hasMask ? layer->mask->image.tiles().find(tc) : nullptr;
-
+        // renderTile already translated by the layer's origin and pre-
+        // multiplied any enabled mask into the source alpha. compose only
+        // sees doc-coord tiles with effective-alpha pixels from here on.
         const uint32_t seed = layer->noiseSeed();
         const BlendMode mode = layer->blend;
         const float opacity = layer->opacity;
+        if (opacity <= 0.f) continue;
 
         for (int py = 0; py < kTilePx; ++py) {
           for (int px = 0; px < kTilePx; ++px) {
@@ -41,16 +41,9 @@ void composeTileRange(const LayerTree& tree, TuxImage& out, int tx0, int ty0,
             const Rgba32F src = layerTile[idx];
             if (src.a <= 0.f) continue;
 
-            float maskV = 1.f;
-            if (hasMask) {
-              maskV = maskTile ? maskTile->data()[idx].r : 1.f;
-            }
-            const float alphaFactor = opacity * maskV;
-            if (alphaFactor <= 0.f) continue;
-
             const int absX = tx * kTilePx + px;
             const int absY = ty * kTilePx + py;
-            accum[idx] = compositePixel(accum[idx], src, mode, alphaFactor,
+            accum[idx] = compositePixel(accum[idx], src, mode, opacity,
                                         seed, absX, absY);
           }
         }

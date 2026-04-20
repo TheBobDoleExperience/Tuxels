@@ -262,6 +262,44 @@ TEST(txl_round_trip_preserves_layer_id_counter) {
   CHECK(fresh > 3);
 }
 
+TEST(txl_round_trip_preserves_layer_origin_and_dims) {
+  // v2 format: per-layer width/height + doc-coord origin must survive a
+  // save-load round-trip. Important for M2-S1 Place Image, where layers no
+  // longer match doc dims.
+  const std::string path = tmpPath("origin");
+  PathGuard g{path};
+
+  Document src(200, 200);
+  // Blank layer (doc-sized, origin 0) to exercise the default path.
+  src.addBlankPixelLayer("BG");
+  // Placed layer: 80×60 at origin (120, 30).
+  TuxImage placed(80, 60);
+  placed.fill(kGreen);
+  src.addPixelLayer(std::move(placed), 120, 30, "Placed");
+
+  std::string err;
+  CHECK(saveTxl(path, src, &err));
+  auto loaded = loadTxl(path, &err);
+  CHECK(loaded.has_value());
+  CHECK_EQ(static_cast<int>((*loaded)->tree().size()), 2);
+
+  auto* bg = dynamic_cast<PixelLayer*>((*loaded)->tree().at(0));
+  CHECK(bg != nullptr);
+  CHECK_EQ(bg->originX, 0);
+  CHECK_EQ(bg->originY, 0);
+  CHECK_EQ(bg->image.width(), 200);
+  CHECK_EQ(bg->image.height(), 200);
+
+  auto* fg = dynamic_cast<PixelLayer*>((*loaded)->tree().at(1));
+  CHECK(fg != nullptr);
+  CHECK_EQ(fg->originX, 120);
+  CHECK_EQ(fg->originY, 30);
+  CHECK_EQ(fg->image.width(), 80);
+  CHECK_EQ(fg->image.height(), 60);
+  CHECK_NEAR(fg->image.getPixel(0, 0).g, 1.f, 1e-6f);
+  CHECK_NEAR(fg->image.getPixel(79, 59).g, 1.f, 1e-6f);
+}
+
 TEST(txl_load_rejects_missing_file) {
   std::string err;
   auto loaded = loadTxl("/tmp/does-not-exist-tuxels-txl.txl", &err);

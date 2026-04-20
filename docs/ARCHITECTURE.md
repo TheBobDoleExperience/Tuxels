@@ -41,9 +41,14 @@ struct Rgba32F { float r, g, b, a; };  // 16 bytes, aligned
   - `float opacity ∈ [0, 1]`
   - `BlendMode blend` (enum)
   - `std::unique_ptr<LayerMask> mask` (nullable)
-  - virtual `void renderTile(TileCoord tc, Rgba32F* out) const` — produces the layer's contribution tile for compositing (before mask/opacity/blend).
+  - `int originX, originY` — doc-coord of the layer's (0, 0) pixel (M2-S0).
+  - virtual `bool renderTile(TileCoord tc, Rgba32F* out) const` — produces the layer's contribution tile in **doc-coord tile space**, translating by origin and folding the mask into output alpha so `compose()` itself is origin-unaware. Returns false when the tile doesn't intersect the layer's content rect.
 - Concrete M0 subclasses:
-  - `PixelLayer` — owns a `TuxImage`.
+  - `PixelLayer` — owns a `TuxImage` sized to the layer's content (not necessarily doc-sized).
+- **Origin invariants** (M2-S0):
+  - Masks share their owning layer's origin AND dimensions. Creating a mask sizes it to `layer->image.{width,height}()`, not doc dims.
+  - `Document::addBlankPixelLayer(name)` still creates a doc-sized layer at origin `(0, 0)`; `Document::addPixelLayer(TuxImage&&, int ox, int oy, name)` installs a layer at an arbitrary origin (used by Place Image).
+  - Crop intersects each layer's doc-space content rect with the crop rect; surviving rect becomes the new image, origin shifts into the new doc coord frame, non-overlapping layers drop to 0×0 (and lose their mask).
 - Future: `AdjustmentLayer`, `GroupLayer`, `SmartObjectLayer`, `TextLayer` (not in M0).
 
 ## 5. Masks
@@ -198,11 +203,12 @@ Exclusion:    C = Cs + Cd - 2*Cs*Cd
 - UI wiring: ToolsPanel picker grew a Crop (C) button; MainWindow holds `std::unique_ptr<CropTool>`, routes the C shortcut, and on commit calls `canvas_->requestRecomposite()` + `refreshSelectionOverlay()` (dimensions changed, so partial recompose doesn't work — `CanvasView::recomposite` detects the mismatch and rebuilds `composite_`).
 - Deferred: Photoshop-style interactive crop with persistent rect + adjustable handles + Enter-to-commit / Escape-to-cancel. Current behavior is drag-to-commit; Ctrl+Z recovers. Good enough for this milestone.
 
-### `.txl` native format v1 (M1-S6)
+### `.txl` native format (M1-S6 → M2-S0)
 
 - `io/TxlIO.{h,cpp}` — pure C++ (no Qt) so it lives in `tuxels_core` and tests link without pulling Qt. Chose a custom chunked binary container over ZIP: no external dependency, no platform packaging differences, and nothing about this v1 benefits from the deflate-per-file layout ZIP gives you. Trade-off accepted: the file is not inspectable with `unzip`.
-- **Layout** (documented in `TxlIO.h`): 8-byte magic `"TUXELS\x01\x00"`, `Version u32 = 1`, `Flags u32 = 0`, `DocWidth/Height u32`, `ActiveLayer i32`, `PaintTarget u8`, `HasSelection u8`, `Reserved u16`, `NumLayers u32`. Each layer emits `{id u64, kind u8 (1=PixelLayer), visible u8, maskEnabled u8, hasMask u8, opacity f32, blend u32, nameLen u32 + utf-8 name, numImageTiles u32 + [TileRecord], numMaskTiles u32 + [TileRecord]}`. A `TileRecord` is `{tx i32, ty i32, Rgba32F[kTilePixels]}` — one uncompressed 1 MiB payload per tile. Selection chunk at the tail mirrors one image.
-- **No compression in v1.** `Flags` is reserved for a future zstd bit; readers hard-fail on unknown flag bits so a v2 writer can't silently hand v1 readers something they can't decode.
+- **Layout** (documented in `TxlIO.h`): 8-byte magic `"TUXELS\x01\x00"`, `Version u32` (`1` = legacy, `2` = current), `Flags u32 = 0`, `DocWidth/Height u32`, `ActiveLayer i32`, `PaintTarget u8`, `HasSelection u8`, `Reserved u16`, `NumLayers u32`. Each layer emits `{id u64, kind u8 (1=PixelLayer), visible u8, maskEnabled u8, hasMask u8, opacity f32, blend u32}` — and then (v2 only) `{LayerWidth u32, LayerHeight u32, OriginX i32, OriginY i32}` — followed by `{nameLen u32 + utf-8 name, numImageTiles u32 + [TileRecord], numMaskTiles u32 + [TileRecord]}`. A `TileRecord` is `{tx i32, ty i32, Rgba32F[kTilePixels]}` — one uncompressed 1 MiB payload per tile. Selection chunk at the tail mirrors one image.
+- **v1 → v2 bump (M2-S0).** Added per-layer dims + origin because placed / transformed layers no longer match doc dims. v1 files remain readable: missing fields default to origin `(0, 0)` and layer dims == doc dims, which matches the legacy invariant (blank layer constructed against the doc size). Writers always emit v2 now — no "save v1" path.
+- **No compression.** `Flags` is reserved for a future zstd bit; readers hard-fail on unknown flag bits so a v3 writer can't silently hand older readers something they can't decode.
 - **Tile-sparse on disk.** We only emit tiles that exist in the `TileStore`, so a 4096×4096 canvas with a couple of strokes writes ~2 MiB, not 256 MiB. This matches how the in-memory `TuxImage` already works.
 - **Endianness.** Host-order writes of primitive types via `reinterpret_cast` + `ofstream::write`. Tuxels only targets little-endian (Linux x86_64) for M1; porting to BE is a v2 task that can flip a `Flags` bit and byteswap. Floats go out in IEEE-754 host order for the same reason.
 - **Mask semantics.** When `hasMask == false`, writers still emit `numMaskTiles u32 = 0` so the layer record has a uniform shape. Readers verify the zero to catch writer/reader drift early.

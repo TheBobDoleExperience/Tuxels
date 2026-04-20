@@ -1,5 +1,6 @@
 #include "history/CropCommand.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "core/Document.h"
@@ -21,36 +22,35 @@ TuxImage cloneImage(const TuxImage& src) {
   return dst;
 }
 
-// Per-pixel copy from a sub-rect of `src` into the upper-left of `dst`.
-// Skips transparent source pixels so the destination stays tile-sparse
-// wherever the source was empty. `crop` is clamped to `src`'s bounds.
-void copyCropInto(const TuxImage& src, Rect crop, TuxImage& dst) {
-  const int x0 = std::max(0, crop.x);
-  const int y0 = std::max(0, crop.y);
-  const int x1 = std::min(src.width(), crop.right());
-  const int y1 = std::min(src.height(), crop.bottom());
-  for (int y = y0; y < y1; ++y) {
-    for (int x = x0; x < x1; ++x) {
-      Rgba32F p = src.getPixel(x, y);
+// Copy a sub-rect of `src` (in `src`'s own coords) into `dst` starting at
+// `dst`'s (0, 0). Skips transparent source pixels so the destination stays
+// tile-sparse wherever the source was empty. `srcRect` is clamped to `src`'s
+// bounds by the caller.
+void copySubRectInto(const TuxImage& src, Rect srcRect, TuxImage& dst) {
+  for (int y = 0; y < srcRect.h; ++y) {
+    for (int x = 0; x < srcRect.w; ++x) {
+      Rgba32F p = src.getPixel(srcRect.x + x, srcRect.y + y);
       if (p.a <= 0.f) continue;
-      dst.setPixel(x - crop.x, y - crop.y, p);
+      dst.setPixel(x, y, p);
     }
   }
 }
 
-TuxImage croppedImage(const TuxImage& src, Rect crop) {
-  TuxImage out(crop.w, crop.h);
-  copyCropInto(src, crop, out);
-  return out;
+// Intersect the layer's content rect (in doc coords) with the crop rect
+// (also in doc coords). Returns the overlap in doc coords; when empty the
+// returned rect has w == 0 || h == 0.
+Rect docOverlap(int originX, int originY, int layerW, int layerH,
+                Rect crop) {
+  const int x0 = std::max(originX, crop.x);
+  const int y0 = std::max(originY, crop.y);
+  const int x1 = std::min(originX + layerW, crop.right());
+  const int y1 = std::min(originY + layerH, crop.bottom());
+  return {x0, y0, std::max(0, x1 - x0), std::max(0, y1 - y0)};
 }
 
 std::unique_ptr<SelectionMask> croppedSelection(const SelectionMask& sel,
                                                 Rect crop) {
   auto out = std::make_unique<SelectionMask>(crop.w, crop.h);
-  // SelectionMask stores its bits in the R channel of a TuxImage. The generic
-  // copy path (which filters on alpha) would drop non-zero selection with
-  // a=0 pixels. Walk R explicitly and write a fully-opaque sentinel where
-  // the source is selected.
   const TuxImage& src = sel.image();
   const int x0 = std::max(0, crop.x);
   const int y0 = std::max(0, crop.y);
@@ -96,6 +96,8 @@ CropCommand::Snapshot CropCommand::captureDeep(const Document& doc) {
     const LayerBase* base = tree.at(i);
     LayerEntry e;
     e.id = base->id;
+    e.originX = base->originX;
+    e.originY = base->originY;
     if (auto* px = dynamic_cast<const PixelLayer*>(base)) {
       e.image = cloneImage(px->image);
     }
@@ -117,11 +119,16 @@ void CropCommand::installDeep(Document& doc, const Snapshot& snap) {
   for (std::size_t i = 0; i < n; ++i) {
     LayerBase* base = tree.at(i);
     const LayerEntry& e = snap.layers[i];
+    base->originX = e.originX;
+    base->originY = e.originY;
     if (auto* px = dynamic_cast<PixelLayer*>(base)) {
       px->image = cloneImage(e.image);
     }
     if (e.hasMask) {
-      if (!base->mask) base->mask = std::make_unique<LayerMask>(snap.width, snap.height);
+      if (!base->mask) {
+        base->mask = std::make_unique<LayerMask>(e.maskImage.width(),
+                                                 e.maskImage.height());
+      }
       base->mask->image = cloneImage(e.maskImage);
       base->mask->enabled = e.maskEnabled;
     } else if (base->mask) {
@@ -135,19 +142,46 @@ void CropCommand::applyCropInPlace(Document& doc, Rect cropRect) {
   auto& tree = doc.tree();
   for (std::size_t i = 0; i < tree.size(); ++i) {
     LayerBase* base = tree.at(i);
-    if (auto* px = dynamic_cast<PixelLayer*>(base)) {
-      px->image = croppedImage(px->image, cropRect);
+    auto* px = dynamic_cast<PixelLayer*>(base);
+    if (!px) continue;
+
+    const int origOx = base->originX;
+    const int origOy = base->originY;
+    const int layerW = px->image.width();
+    const int layerH = px->image.height();
+    const Rect overlapDoc = docOverlap(origOx, origOy, layerW, layerH,
+                                       cropRect);
+
+    if (overlapDoc.w <= 0 || overlapDoc.h <= 0) {
+      // No pixels survive. Drop to an empty layer at origin (0, 0) — the
+      // layer slot stays in the tree so indexes remain stable for redo and
+      // for code that tracks the active layer.
+      px->image = TuxImage(0, 0);
+      base->originX = 0;
+      base->originY = 0;
+      if (base->mask) base->mask.reset();
+      continue;
     }
+
+    // New layer image sized exactly to the surviving pixel rect, sourced
+    // from layer-local coords [overlap - origin .. overlap + size - origin).
+    const Rect srcInLayer{overlapDoc.x - origOx, overlapDoc.y - origOy,
+                          overlapDoc.w, overlapDoc.h};
+    TuxImage newImage(overlapDoc.w, overlapDoc.h);
+    copySubRectInto(px->image, srcInLayer, newImage);
+    px->image = std::move(newImage);
+
     if (base->mask) {
-      // Absent tiles in a mask default to reveal (1.0), so we leave the
-      // destination tile-sparse and only copy explicit pixels. Matches the
-      // layer-image treatment.
-      auto newMask = std::make_unique<LayerMask>(cropRect.w, cropRect.h);
-      copyCropInto(base->mask->image, cropRect, newMask->image);
+      auto newMask = std::make_unique<LayerMask>(overlapDoc.w, overlapDoc.h);
+      copySubRectInto(base->mask->image, srcInLayer, newMask->image);
       newMask->enabled = base->mask->enabled;
       base->mask = std::move(newMask);
     }
+
+    base->originX = overlapDoc.x - cropRect.x;
+    base->originY = overlapDoc.y - cropRect.y;
   }
+
   if (const SelectionMask* sel = doc.selection()) {
     doc.setSelection(croppedSelection(*sel, cropRect));
   }

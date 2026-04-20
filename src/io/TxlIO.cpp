@@ -22,11 +22,13 @@ namespace tuxels {
 namespace {
 
 constexpr char kMagic[8] = {'T', 'U', 'X', 'E', 'L', 'S', '\x01', '\x00'};
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersionCurrent = 2;
+constexpr uint32_t kVersionLegacyNoOrigin = 1;
 constexpr uint8_t kLayerKindPixel = 1;
 
 // Host-order writes. Tuxels only targets little-endian hosts (Linux x86_64
-// in M1); v2 can add an endian marker to `Flags` if we ever port to BE.
+// in M1); a future version can add an endian marker to `Flags` if we ever
+// port to BE.
 
 template <class T>
 bool writeRaw(std::ofstream& out, const T& value) {
@@ -101,7 +103,7 @@ bool saveTxl(const std::string& path, const Document& doc, std::string* err) {
   out.write(kMagic, 8);
   if (!out.good()) { setErr(err, "Failed writing magic"); return false; }
 
-  writeRaw(out, kVersion);
+  writeRaw(out, kVersionCurrent);
   writeRaw(out, static_cast<uint32_t>(0));  // Flags
 
   writeRaw(out, static_cast<uint32_t>(doc.width()));
@@ -135,6 +137,13 @@ bool saveTxl(const std::string& path, const Document& doc, std::string* err) {
     writeRaw(out, static_cast<uint8_t>(layer->mask ? 1 : 0));
     writeRaw(out, layer->opacity);
     writeRaw(out, static_cast<uint32_t>(layer->blend));
+
+    // v2 additions: layer backing-image dims + doc-coord origin. Makes
+    // Place Image / Move / Free Transform reversible across save-load.
+    writeRaw(out, static_cast<uint32_t>(px->image.width()));
+    writeRaw(out, static_cast<uint32_t>(px->image.height()));
+    writeRaw(out, static_cast<int32_t>(layer->originX));
+    writeRaw(out, static_cast<int32_t>(layer->originY));
 
     const uint32_t nameLen = static_cast<uint32_t>(layer->name.size());
     writeRaw(out, nameLen);
@@ -186,7 +195,7 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
 
   uint32_t version = 0, flags = 0;
   readRaw(in, version);
-  if (version != kVersion) {
+  if (version != kVersionCurrent && version != kVersionLegacyNoOrigin) {
     setErr(err, "Unsupported .txl version: " + std::to_string(version));
     return std::nullopt;
   }
@@ -195,6 +204,7 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
     setErr(err, "Unknown .txl flags bits: " + std::to_string(flags));
     return std::nullopt;
   }
+  const bool hasOriginFields = (version >= kVersionCurrent);
 
   uint32_t w = 0, h = 0;
   int32_t activeLayer = 0;
@@ -235,6 +245,15 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
     readRaw(in, hasMask);
     readRaw(in, opacity);
     readRaw(in, blend);
+
+    uint32_t layerW = w, layerH = h;
+    int32_t originX = 0, originY = 0;
+    if (hasOriginFields) {
+      readRaw(in, layerW);
+      readRaw(in, layerH);
+      readRaw(in, originX);
+      readRaw(in, originY);
+    }
     readRaw(in, nameLen);
     if (!in.good()) {
       setErr(err, "Truncated layer header at index " + std::to_string(li));
@@ -249,6 +268,13 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
       setErr(err, "Implausible layer name length");
       return std::nullopt;
     }
+    // Cap dims defensively — corrupt headers could otherwise trigger huge
+    // allocations inside TuxImage construction. The doc-dim cap is implied
+    // by the `(1u << 20)` ceiling we already apply to tile counts above.
+    if (layerW > (1u << 20) || layerH > (1u << 20)) {
+      setErr(err, "Implausible layer dimensions");
+      return std::nullopt;
+    }
 
     std::string name(nameLen, '\0');
     if (nameLen > 0) {
@@ -259,13 +285,15 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
       }
     }
 
-    auto layer = std::make_unique<PixelLayer>(static_cast<int>(w),
-                                               static_cast<int>(h));
+    auto layer = std::make_unique<PixelLayer>(static_cast<int>(layerW),
+                                               static_cast<int>(layerH));
     layer->id = id;
     layer->name = std::move(name);
     layer->visible = (visible != 0);
     layer->opacity = opacity;
     layer->blend = static_cast<BlendMode>(blend);
+    layer->originX = originX;
+    layer->originY = originY;
 
     if (!readImageInto(in, layer->image)) {
       setErr(err, "Failed reading layer image (layer " + std::to_string(li) + ")");
@@ -273,8 +301,8 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
     }
 
     if (hasMask) {
-      auto mask = std::make_unique<LayerMask>(static_cast<int>(w),
-                                               static_cast<int>(h));
+      auto mask = std::make_unique<LayerMask>(static_cast<int>(layerW),
+                                               static_cast<int>(layerH));
       mask->enabled = (maskEnabled != 0);
       if (!readImageInto(in, mask->image)) {
         setErr(err, "Failed reading mask (layer " + std::to_string(li) + ")");

@@ -677,15 +677,19 @@ void MainWindow::onAddLayerMask() {
     statusBar()->showMessage(tr("Layer already has a mask."), 3000);
     return;
   }
-  const int w = doc_->width();
-  const int h = doc_->height();
+  // Mask matches the layer's own backing-image dims (post-M2-S0 masks share
+  // their owning layer's origin + size). For legacy blank layers that equals
+  // the doc dims; for layers placed off-origin it correctly stays layer-
+  // sized instead of doc-sized.
+  const int mw = px->image.width();
+  const int mh = px->image.height();
   auto stash = std::make_shared<std::unique_ptr<LayerMask>>();
 
-  auto doIt = [this, px, stash, w, h]() mutable {
+  auto doIt = [this, px, stash, mw, mh]() mutable {
     if (*stash) {
       px->mask = std::move(*stash);
     } else {
-      auto m = std::make_unique<LayerMask>(w, h);
+      auto m = std::make_unique<LayerMask>(mw, mh);
       m->image.fill(Rgba32F(1.f, 1.f, 1.f, 1.f));  // fully reveal
       px->mask = std::move(m);
     }

@@ -83,6 +83,23 @@ class Document {
     return raw;
   }
 
+  // Append a pixel layer populated from an existing TuxImage at doc-coord
+  // origin `(ox, oy)`. Used by Place Image (S1) so placed PNGs can keep
+  // offscreen pixels when they exceed the doc bounds.
+  PixelLayer* addPixelLayer(TuxImage&& img, int ox, int oy,
+                            const std::string& name) {
+    auto layer = std::make_unique<PixelLayer>();
+    layer->image = std::move(img);
+    layer->id = nextLayerId();
+    layer->name = name;
+    layer->originX = ox;
+    layer->originY = oy;
+    PixelLayer* raw = layer.get();
+    tree_.add(std::move(layer));
+    activeLayerIndex_ = static_cast<int>(tree_.size()) - 1;
+    return raw;
+  }
+
  private:
   int width_ = 0;
   int height_ = 0;
