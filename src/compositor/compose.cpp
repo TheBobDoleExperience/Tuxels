@@ -10,8 +10,41 @@ namespace tuxels {
 
 namespace {
 
+// Render a LayerOverride's image into a tile's local buffer using the same
+// overlap math as PixelLayer::renderTile, but skipping masks. Returns true
+// if any non-transparent pixel was written.
+bool renderOverrideTile(const LayerOverride& ov, TileCoord tc, Rgba32F* out) {
+  const int docX0 = tc.tx * kTilePx;
+  const int docY0 = tc.ty * kTilePx;
+  const int layX0 = docX0 - ov.originX;
+  const int layY0 = docY0 - ov.originY;
+  const int layW = ov.image->width();
+  const int layH = ov.image->height();
+  const int ox0 = std::max(0, -layX0);
+  const int oy0 = std::max(0, -layY0);
+  const int ox1 = std::min(kTilePx, layW - layX0);
+  const int oy1 = std::min(kTilePx, layH - layY0);
+  if (ox0 >= ox1 || oy0 >= oy1) return false;
+
+  for (int i = 0; i < kTilePixels; ++i) out[i] = Rgba32F::transparent();
+
+  TileRowCursor cur(*ov.image);
+  bool anyOpaque = false;
+  for (int py = oy0; py < oy1; ++py) {
+    const int ly = layY0 + py;
+    for (int px = ox0; px < ox1; ++px) {
+      const int lx = layX0 + px;
+      const Rgba32F c = cur.at(lx, ly);
+      if (c.a <= 0.f) continue;
+      out[py * kTilePx + px] = c;
+      anyOpaque = true;
+    }
+  }
+  return anyOpaque;
+}
+
 void composeTileRange(const LayerTree& tree, TuxImage& out, int tx0, int ty0,
-                      int tx1, int ty1) {
+                      int tx1, int ty1, const LayerOverride* override) {
   std::vector<Rgba32F> accum(kTilePixels);
   std::vector<Rgba32F> layerTile(kTilePixels);
 
@@ -25,7 +58,12 @@ void composeTileRange(const LayerTree& tree, TuxImage& out, int tx0, int ty0,
         if (!layer->visible || layer->opacity <= 0.f) continue;
 
         std::fill(layerTile.begin(), layerTile.end(), Rgba32F::transparent());
-        if (!layer->renderTile(tc, layerTile.data())) continue;
+        const bool useOverride = override && override->image &&
+                                 override->layerId == layer->id;
+        const bool rendered =
+            useOverride ? renderOverrideTile(*override, tc, layerTile.data())
+                        : layer->renderTile(tc, layerTile.data());
+        if (!rendered) continue;
 
         // renderTile already translated by the layer's origin and pre-
         // multiplied any enabled mask into the source alpha. compose only
@@ -65,13 +103,15 @@ void composeTileRange(const LayerTree& tree, TuxImage& out, int tx0, int ty0,
 
 }  // namespace
 
-void compose(const LayerTree& tree, TuxImage& out) {
+void compose(const LayerTree& tree, TuxImage& out,
+             const LayerOverride* override) {
   if (out.width() <= 0 || out.height() <= 0) return;
   const Rect tb = out.tileBounds();
-  composeTileRange(tree, out, tb.x, tb.y, tb.x + tb.w, tb.y + tb.h);
+  composeTileRange(tree, out, tb.x, tb.y, tb.x + tb.w, tb.y + tb.h, override);
 }
 
-void compose(const LayerTree& tree, TuxImage& out, Rect pixelRect) {
+void compose(const LayerTree& tree, TuxImage& out, Rect pixelRect,
+             const LayerOverride* override) {
   if (out.width() <= 0 || out.height() <= 0) return;
   if (pixelRect.isEmpty()) return;
   const Rect tb = out.tileBounds();
@@ -92,7 +132,7 @@ void compose(const LayerTree& tree, TuxImage& out, Rect pixelRect) {
   const int ty1 = std::min(tb.y + tb.h, divFloor(py1 - 1, kTilePx) + 1);
   if (tx1 <= tx0 || ty1 <= ty0) return;
 
-  composeTileRange(tree, out, tx0, ty0, tx1, ty1);
+  composeTileRange(tree, out, tx0, ty0, tx1, ty1, override);
 }
 
 }  // namespace tuxels

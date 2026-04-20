@@ -179,4 +179,63 @@ TEST(partial_compose_crosses_tile_boundary) {
   CHECK(approxEqual(out.getPixel(260, 260), Rgba32F(0.25f, 0.25f, 0.25f, 1.f)));
 }
 
+TEST(layer_override_substitutes_image_for_matching_id) {
+  // Base red layer + a second layer whose real image is fully green.
+  // Override the second layer with a blue image at the same origin — the
+  // composite should show blue, not green, and the tree itself must be
+  // untouched afterward.
+  LayerTree tree;
+  tree.add(solidLayer(32, 32, Rgba32F(1.f, 0.f, 0.f, 1.f), 1));
+  tree.add(solidLayer(32, 32, Rgba32F(0.f, 1.f, 0.f, 1.f), 42));
+
+  TuxImage blue(32, 32);
+  blue.fill(Rgba32F(0.f, 0.f, 1.f, 1.f));
+  LayerOverride ov;
+  ov.layerId = 42;
+  ov.image = &blue;
+  ov.originX = 0;
+  ov.originY = 0;
+
+  TuxImage out(32, 32);
+  compose(tree, out, &ov);
+  CHECK(approxEqual(out.getPixel(10, 10), Rgba32F(0.f, 0.f, 1.f, 1.f)));
+
+  // Confirm the tree wasn't touched — re-composing without the override
+  // falls back to the real green layer.
+  compose(tree, out);
+  CHECK(approxEqual(out.getPixel(10, 10), Rgba32F(0.f, 1.f, 0.f, 1.f)));
+}
+
+TEST(layer_override_honors_origin_and_skips_out_of_bounds) {
+  // Override a layer at doc (20, 20) with a 10×10 blue image. Pixels
+  // inside that rect should be blue; the base red should show elsewhere.
+  LayerTree tree;
+  tree.add(solidLayer(64, 64, Rgba32F(1.f, 0.f, 0.f, 1.f), 1));
+  tree.add(solidLayer(10, 10, Rgba32F(0.f, 1.f, 0.f, 1.f), 7));
+
+  TuxImage blue(10, 10);
+  blue.fill(Rgba32F(0.f, 0.f, 1.f, 1.f));
+  LayerOverride ov{7, &blue, 20, 20};
+
+  TuxImage out(64, 64);
+  compose(tree, out, &ov);
+  CHECK(approxEqual(out.getPixel(25, 25), Rgba32F(0.f, 0.f, 1.f, 1.f)));
+  CHECK(approxEqual(out.getPixel(0, 0), Rgba32F(1.f, 0.f, 0.f, 1.f)));
+  CHECK(approxEqual(out.getPixel(40, 40), Rgba32F(1.f, 0.f, 0.f, 1.f)));
+}
+
+TEST(layer_override_non_matching_id_is_ignored) {
+  // An override keyed to an id not in the tree must not perturb output.
+  LayerTree tree;
+  tree.add(solidLayer(16, 16, Rgba32F(0.25f, 0.5f, 0.75f, 1.f), 3));
+
+  TuxImage blue(16, 16);
+  blue.fill(Rgba32F(0.f, 0.f, 1.f, 1.f));
+  LayerOverride ov{999, &blue, 0, 0};
+
+  TuxImage out(16, 16);
+  compose(tree, out, &ov);
+  CHECK(approxEqual(out.getPixel(0, 0), Rgba32F(0.25f, 0.5f, 0.75f, 1.f)));
+}
+
 int main() { return tuxels::testing::run(); }
