@@ -1,0 +1,12 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/icons">
+        <file alias="tuxels-16.png">../assets/icons/tuxels-16.png</file>
+        <file alias="tuxels-32.png">../assets/icons/tuxels-32.png</file>
+        <file alias="tuxels-48.png">../assets/icons/tuxels-48.png</file>
+        <file alias="tuxels-64.png">../assets/icons/tuxels-64.png</file>
+        <file alias="tuxels-128.png">../assets/icons/tuxels-128.png</file>
+        <file alias="tuxels-256.png">../assets/icons/tuxels-256.png</file>
+        <file alias="tuxels-512.png">../assets/icons/tuxels-512.png</file>
+    </qresource>
+</RCC>

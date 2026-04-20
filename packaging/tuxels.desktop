@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Tuxels
+GenericName=Image Editor
+Comment=Tile-sparse float raster image editor
+Exec=tuxels %F
+TryExec=tuxels
+Terminal=false
+Icon=tuxels
+Categories=Graphics;2DGraphics;RasterGraphics;
+MimeType=image/png;
+StartupWMClass=Tuxels
+Keywords=image;editor;paint;raster;photo;

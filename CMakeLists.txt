@@ -57,7 +57,11 @@ add_executable(tuxels
   src/ui/LayersPanel.cpp
   src/ui/ToolsPanel.h
   src/ui/ToolsPanel.cpp
+  resources/tuxels.qrc
 )
+if(WIN32)
+  target_sources(tuxels PRIVATE packaging/tuxels.rc)
+endif()
 target_include_directories(tuxels PRIVATE src)
 target_link_libraries(tuxels PRIVATE
   tuxels_core
