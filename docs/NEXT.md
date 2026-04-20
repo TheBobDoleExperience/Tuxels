@@ -4,28 +4,17 @@
 
 ## Immediately Next
 
-**Tag `v0.2.0-m2`.** S0–S6 shipped 2026-04-20; S7 user walkthrough passed
-2026-04-21 with one regression caught and fixed (commit `4492355`): the
-Free Transform Enter path was pushing a `TransformCommand` onto the undo
-stack without first applying it. Because Transform's preview is an
-overlay (`LayerOverride`), the real layer was untouched — so committing
-popped the overlay and compose rendered the original pixels.
-`UndoStack::push`'s contract is explicit: "Push a command whose side-
-effect has already been applied." The fix calls `cmd->apply()` before
-`undoStack_->push(...)` and added `transform_pending_commit_writes_through_apply`
-as a regression test walking the full `tool.commit() → Command →
-apply() → assert state` path.
+**M2 shipped as `v0.2.0-m2`** (tagged + pushed 2026-04-21). Everything in
+the plan landed, the user sign-off walkthrough passed, and one
+regression found during that walkthrough is fixed with a dedicated
+integration test (commit `4492355`: Transform Enter path now calls
+`cmd->apply()` before `undoStack_->push(...)` — `UndoStack::push` expects
+the side-effect to already be applied, and Transform's preview is an
+overlay so the real layer was untouched during the drag).
 
-Tag the milestone when the user gives the green light:
+Next: **M3 kickoff discussion.**
 
-```
-git tag -a v0.2.0-m2 -m "M2 — Position, Shape, Stroke Quality"
-git push origin v0.2.0-m2
-```
-
-Then move to M3 kickoff.
-
-## After the tag — M3 kickoff discussion
+## M3 kickoff discussion
 
 Adjustments (Levels / Curves) were deferred from the M2 kickoff because
 they don't share a natural scope boundary with the manipulation tools.
@@ -52,14 +41,14 @@ M0/M1/M2 were scoped.
 
 ## Cold-Start Checklist
 
-1. `cat docs/STATUS.md` — current state (M2 user-verified, tag pending).
-2. This file — what to do next.
+1. `cat docs/STATUS.md` — current state (M2 shipped as `v0.2.0-m2`).
+2. This file — what to do next (M3 kickoff).
 3. `cat docs/ARCHITECTURE.md` — don't re-derive decisions.
 4. `cat /home/james/.claude/plans/cryptic-stargazing-moonbeam.md` — M2
-   plan (archive — S0–S6 done, S7 user-verified).
-5. `git log --oneline -20` — recent commits (look for `4492355` transform
-   apply-before-push fix).
+   plan archive (S0–S7 done).
+5. `git log --oneline -20` + `git tag --list` — recent commits and the
+   `v0.2.0-m2` tag.
 6. `cmake --build build && ctest --test-dir build` — confirm green tree
-   (215 passing cases across 20 executables as of the S7 regression fix).
-7. If user wants the tag: `git tag -a v0.2.0-m2 -m "..."` + push.
-   Otherwise pick up "After the tag — M3 kickoff discussion" above.
+   (215 passing cases across 20 executables).
+7. Pick up the M3 kickoff discussion above. No plan file yet — the user
+   drives the scope conversation first, then drop into plan mode.
