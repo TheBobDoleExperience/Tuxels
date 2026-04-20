@@ -1062,9 +1062,15 @@ bool MainWindow::commitTransformIfActive() {
   if (!transformTool_ || !transformTool_->isActive()) return false;
   auto p = transformTool_->commit();
   if (!p) return false;  // identity → nothing to push
-  undoStack_->push(std::make_unique<TransformCommand>(
+  // Unlike the Move tool, the Transform tool's live preview is a compose
+  // override — the real layer is untouched during the drag. Apply the
+  // command's side-effect *before* pushing so UndoStack's "state already
+  // matches after-commit" invariant holds.
+  auto cmd = std::make_unique<TransformCommand>(
       doc_.get(), p->layerId, std::move(p->before), std::move(p->after),
-      p->beforeX, p->beforeY, p->afterX, p->afterY));
+      p->beforeX, p->beforeY, p->afterX, p->afterY);
+  cmd->apply();
+  undoStack_->push(std::move(cmd));
   if (canvas_) canvas_->requestRecomposite();
   if (layersPanel_) layersPanel_->refresh();
   return true;

@@ -5,6 +5,7 @@
 #include "core/Document.h"
 #include "core/Pixel.h"
 #include "core/TuxImage.h"
+#include "history/TransformCommand.h"
 #include "layers/PixelLayer.h"
 #include "test_harness.h"
 #include "tools/ToolBase.h"
@@ -204,6 +205,37 @@ TEST(transform_commits_through_layer_override_preview) {
   // Real layer is not mutated — its origin is still the original value.
   CHECK_EQ(layer->originX, 80);
   CHECK_EQ(layer->originY, 80);
+}
+
+// Regression: the tool's live preview is an overlay, so the real layer is
+// untouched through the drag. If the caller pushes the resulting
+// TransformCommand without also running apply(), the layer silently
+// reverts to its pre-transform image once the overlay clears. This test
+// catches that by walking the full commit → TransformCommand → apply path
+// and asserting the layer image matches the transformed scratch.
+TEST(transform_pending_commit_writes_through_apply) {
+  Document doc(400, 400);
+  auto* layer = addSolidLayer(doc, 40, 40, kGreen, 100, 100, "L");
+  TransformTool t;
+  t.enter(doc);
+  t.setScale(2.f, 2.f);
+  auto p = t.commit();
+  CHECK(p.has_value());
+  // Before apply, the layer is still the original 40×40 at (100,100).
+  CHECK_EQ(layer->image.width(), 40);
+  CHECK_EQ(layer->image.height(), 40);
+  CHECK_EQ(layer->originX, 100);
+  CHECK_EQ(layer->originY, 100);
+
+  TransformCommand cmd(&doc, p->layerId, p->before, p->after, p->beforeX,
+                       p->beforeY, p->afterX, p->afterY);
+  cmd.apply();
+  // After apply the layer must hold the scaled image + new origin.
+  CHECK_EQ(layer->image.width(), 80);
+  CHECK_EQ(layer->image.height(), 80);
+  CHECK_EQ(layer->originX, 80);
+  CHECK_EQ(layer->originY, 80);
+  CHECK(approxEqual(layer->image.getPixel(40, 40), kGreen, 1e-4f));
 }
 
 int main() { return tuxels::testing::run(); }
