@@ -142,4 +142,41 @@ TEST(tiles_at_edge_are_cropped_and_transparent_outside) {
   CHECK(approxEqual(out.getPixel(300, 300), Rgba32F::transparent()));
 }
 
+TEST(partial_compose_updates_only_covered_tiles) {
+  // 600×600 → 3×3 tiles of 256px. Start with a single red layer. Full
+  // compose fills everything red. Swap the layer for green and partial-
+  // compose only the tile-(0,0) region; the other tiles must still read
+  // red from the previous composite.
+  LayerTree tree;
+  tree.add(solidLayer(600, 600, Rgba32F(1.f, 0.f, 0.f, 1.f), 1));
+  TuxImage out(600, 600);
+  compose(tree, out);
+  CHECK(approxEqual(out.getPixel(0, 0), Rgba32F(1.f, 0.f, 0.f, 1.f)));
+  CHECK(approxEqual(out.getPixel(500, 500), Rgba32F(1.f, 0.f, 0.f, 1.f)));
+
+  tree.removeAt(0);
+  tree.add(solidLayer(600, 600, Rgba32F(0.f, 1.f, 0.f, 1.f), 2));
+  compose(tree, out, Rect{10, 10, 40, 40});  // lives in tile (0,0)
+  CHECK(approxEqual(out.getPixel(20, 20), Rgba32F(0.f, 1.f, 0.f, 1.f)));
+  // Tile (2,2) was not re-composed — still the previous red.
+  CHECK(approxEqual(out.getPixel(500, 500), Rgba32F(1.f, 0.f, 0.f, 1.f)));
+}
+
+TEST(partial_compose_empty_rect_is_no_op) {
+  LayerTree tree;
+  tree.add(solidLayer(64, 64, Rgba32F(1.f, 0.f, 0.f, 1.f), 1));
+  TuxImage out(64, 64);
+  compose(tree, out, Rect{0, 0, 0, 0});
+  CHECK_EQ(out.getPixel(0, 0), Rgba32F::transparent());
+}
+
+TEST(partial_compose_crosses_tile_boundary) {
+  LayerTree tree;
+  tree.add(solidLayer(600, 600, Rgba32F(0.25f, 0.25f, 0.25f, 1.f), 1));
+  TuxImage out(600, 600);
+  compose(tree, out, Rect{250, 250, 20, 20});  // spans tile (0,0) and (1,1)
+  CHECK(approxEqual(out.getPixel(255, 255), Rgba32F(0.25f, 0.25f, 0.25f, 1.f)));
+  CHECK(approxEqual(out.getPixel(260, 260), Rgba32F(0.25f, 0.25f, 0.25f, 1.f)));
+}
+
 int main() { return tuxels::testing::run(); }

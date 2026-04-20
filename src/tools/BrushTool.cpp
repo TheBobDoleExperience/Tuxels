@@ -40,4 +40,9 @@ void BrushTool::release(Document& /*doc*/, float x, float y, MouseButton btn) {
   activeTarget_ = nullptr;
 }
 
+Rect BrushTool::takeDirtyRect() {
+  if (!engine_) return {};
+  return engine_->takeIncrementalBounds();
+}
+
 }  // namespace tuxels

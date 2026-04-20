@@ -12,6 +12,7 @@ class BrushTool;
 class CanvasView;
 class LayerBase;
 class LayersPanel;
+class ToolsPanel;
 class UndoStack;
 
 class MainWindow : public QMainWindow {
@@ -50,13 +51,14 @@ class MainWindow : public QMainWindow {
   void buildDocks();
   void setDocument(std::unique_ptr<Document> doc);
   void populateSampleDocument();
-  void refreshAfterUndoRedo();
+  void refreshAfterUndoRedo(Rect dirtyRect = {});
 
   std::unique_ptr<Document> doc_;
   std::unique_ptr<BrushTool> brushTool_;
   std::unique_ptr<UndoStack> undoStack_;
   CanvasView* canvas_ = nullptr;
   LayersPanel* layersPanel_ = nullptr;
+  ToolsPanel* toolsPanel_ = nullptr;
 };
 
 }  // namespace tuxels

@@ -21,6 +21,12 @@ class CanvasView : public QWidget {
   void setDocument(Document* doc);
   void setTool(ToolBase* tool) noexcept { tool_ = tool; }
   void requestRecomposite();
+  // Partial variant: union `pixelRect` into the pending dirty region so the
+  // next paint recomposites only affected tiles. Empty rect is a no-op.
+  void requestRecomposite(Rect pixelRect);
+  // Repaint just the cursor-ring region. Call when the active tool's radius
+  // changes (e.g. user adjusted brush size while hovering).
+  void refreshBrushCursor();
 
   double zoom() const noexcept { return zoom_; }
   void setZoom(double z);
@@ -36,18 +42,31 @@ class CanvasView : public QWidget {
   void mousePressEvent(QMouseEvent*) override;
   void mouseMoveEvent(QMouseEvent*) override;
   void mouseReleaseEvent(QMouseEvent*) override;
+  void enterEvent(QEnterEvent*) override;
+  void leaveEvent(QEvent*) override;
   QSize sizeHint() const override { return QSize(1024, 768); }
 
  private:
   void recomposite();
-  void ensureCacheImage();
+  void recompositePartial(Rect pixelRect);
+  void ensureCacheImage(Rect pixelRect);
   QPointF canvasToWidget(QPointF p) const;
+  QRect widgetRectForPixels(Rect pixelRect) const;
+  // Widget-space bounding rect for the cursor ring centered at widget pos
+  // `p`, sized to the active tool's radius. Empty if no radius is reported.
+  QRect brushCursorWidgetRect(QPointF p) const;
+  // Update `cursorWidgetPos_`, invalidating both the old and new ring
+  // regions so the ring visibly follows the mouse.
+  void moveBrushCursorTo(QPointF p);
 
   Document* doc_ = nullptr;
   ToolBase* tool_ = nullptr;
   TuxImage composite_;
   QImage cache_;
   bool dirty_ = true;
+  // Accumulated dirty rect for the next paint. Empty means "whole image"
+  // when dirty_ is true; ignored when dirty_ is false.
+  Rect dirtyRect_{};
 
   double zoom_ = 1.0;
   QPointF pan_ = {0.0, 0.0};
@@ -55,6 +74,12 @@ class CanvasView : public QWidget {
   bool painting_ = false;
   QPoint panStart_;
   QPointF panStartOffset_;
+
+  // Last known cursor position in widget coordinates, and whether the
+  // cursor is currently over the canvas. paintEvent draws the ring only
+  // when inCanvas_ and the active tool returns a radius.
+  QPointF cursorWidgetPos_{-1.0, -1.0};
+  bool cursorInCanvas_ = false;
 };
 
 }  // namespace tuxels

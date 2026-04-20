@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 
 #include "brush/RoundBrush.h"
 #include "core/TuxImage.h"
@@ -22,6 +23,10 @@ class BrushTool : public ToolBase {
   void press(Document& doc, float x, float y, MouseButton btn) override;
   void move(Document& doc, float x, float y) override;
   void release(Document& doc, float x, float y, MouseButton btn) override;
+  Rect takeDirtyRect() override;
+  std::optional<float> cursorRadiusPx() const override {
+    return brush_.diameter() * 0.5f;
+  }
 
   struct StrokeInfo {
     PixelLayer* layer = nullptr;

@@ -27,6 +27,15 @@ class BrushEngine {
   Rect strokeBounds() const noexcept { return bounds_; }
   void clearBounds() noexcept { bounds_ = {}; }
 
+  // Rect covering stamps laid since the last takeIncrementalBounds() call.
+  // Used by the UI to recomposite only the freshly-dirtied region instead
+  // of the whole image on every mouse-move tick.
+  Rect takeIncrementalBounds() noexcept {
+    Rect r = incremental_;
+    incremental_ = {};
+    return r;
+  }
+
  private:
   void growBounds(int x0, int y0, int x1, int y1);
 
@@ -37,6 +46,7 @@ class BrushEngine {
   float lastY_ = 0.f;
   float distAccum_ = 0.f;
   Rect bounds_{};
+  Rect incremental_{};
 };
 
 }  // namespace tuxels

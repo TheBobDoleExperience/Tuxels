@@ -237,6 +237,7 @@ void LayerRowWidget::rebuildMaskThumbnail() {
     return;
   }
   const TuxImage& mi = layer_->mask->image;
+  const bool disabled = !layer_->mask->enabled;
   QImage img(kThumbPx, kThumbPx, QImage::Format_RGBA8888);
   const int iw = mi.width();
   const int ih = mi.height();
@@ -249,17 +250,26 @@ void LayerRowWidget::rebuildMaskThumbnail() {
         v = std::clamp(mi.getPixel(sx, sy).r, 0.f, 1.f);
       }
       auto* row = reinterpret_cast<uchar*>(img.scanLine(y));
-      const auto g = static_cast<uchar>(std::lround(v * 255.f));
-      row[x * 4 + 0] = g;
+      uchar r = static_cast<uchar>(std::lround(v * 255.f));
+      uchar g = r;
+      uchar b = r;
+      if (disabled) {
+        // Bake a red tint straight onto the pixmap (stylesheet background
+        // wouldn't show through the opaque label pixmap).
+        constexpr float kTintA = 0.45f;
+        r = static_cast<uchar>(std::lround(
+            (1.f - kTintA) * r + kTintA * 220.f));
+        g = static_cast<uchar>(std::lround((1.f - kTintA) * g));
+        b = static_cast<uchar>(std::lround((1.f - kTintA) * b));
+      }
+      row[x * 4 + 0] = r;
       row[x * 4 + 1] = g;
-      row[x * 4 + 2] = g;
+      row[x * 4 + 2] = b;
       row[x * 4 + 3] = 255;
     }
   }
   maskThumb_->setPixmap(QPixmap::fromImage(img));
   maskThumb_->show();
-  // Visually indicate a disabled mask with a dim overlay via tooltip only
-  // for M0 — stylesheet reuse happens in updateThumbHighlight().
 }
 
 void LayerRowWidget::updateThumbHighlight() {
@@ -267,12 +277,9 @@ void LayerRowWidget::updateThumbHighlight() {
   const bool maskSel = active_ && paintTarget_ == PaintTarget::Mask;
   thumb_->setStyleSheet(layerSel ? "border: 2px solid #3cf;" : "");
   if (!maskThumb_) return;
-  QString style;
-  if (maskSel) style += "border: 2px solid #3cf;";
-  if (layer_ && layer_->mask && !layer_->mask->enabled) {
-    style += "background-color: rgba(200,0,0,60);";
-  }
-  maskThumb_->setStyleSheet(style);
+  // Disabled-mask tint is baked into the pixmap by rebuildMaskThumbnail;
+  // the stylesheet only carries the active-thumb border.
+  maskThumb_->setStyleSheet(maskSel ? "border: 2px solid #3cf;" : "");
 }
 
 }  // namespace tuxels

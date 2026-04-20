@@ -25,6 +25,25 @@ class PaintCommand : public Command {
   void redo() override { applySnapshot(after_); }
   const std::string& label() const override { return label_; }
 
+  Rect dirtyRect() const override {
+    Rect r;
+    for (const auto& kv : before_) {
+      const TileCoord tc = kv.first;
+      const int x = tc.tx * kTilePx;
+      const int y = tc.ty * kTilePx;
+      if (r.isEmpty()) {
+        r = {x, y, kTilePx, kTilePx};
+      } else {
+        const int nx = std::min(r.x, x);
+        const int ny = std::min(r.y, y);
+        const int nr = std::max(r.right(), x + kTilePx);
+        const int nb = std::max(r.bottom(), y + kTilePx);
+        r = {nx, ny, nr - nx, nb - ny};
+      }
+    }
+    return r;
+  }
+
  private:
   void applySnapshot(const TuxImage::TileSnapshot& snap) {
     if (!target_) return;

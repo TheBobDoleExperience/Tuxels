@@ -4,66 +4,53 @@
 
 ## Immediately Next
 
-**S10 — Finish manual verification, then tag v0.0.1-m0**
+**M1 — scope & plan.** M0 shipped as `v0.0.1-m0` on 2026-04-20. User has
+asked for, in their own words:
 
-**Status (2026-04-20):** User began a GUI pass through the DoD and reported
-"I think it's good, but I need to spend more time testing." No issues filed
-yet. Nothing is tagged. **Do not start M1 until the user explicitly signs
-off** — they want more testing time on the built `./build/tuxels` binary
-before we commit to v0.0.1-m0.
+1. "More tools added to the tool bar (cropping, bucket tool, smart
+   selection, etc.)"
+2. "Tuxels should have its own proprietary file type for non-destructive
+   editing (I was thinking `.txl`)"
+3. PSD support "can come later (or whenever you think it's best to
+   incorporate it into the workflow)"
 
-When the user returns: ask them whether they finished the walkthrough and
-whether anything needs fixing. If clean → tag `v0.0.1-m0`, append an
-"M0 complete" entry to `LOG.md` with the tagged SHA, flip S10 to ✅ in
-`STATUS.md`, then offer the M1 candidates below. If they found issues →
-fix first, re-test, then tag.
+The sequencing recommendation waiting for user confirmation: do a
+**Selection & Fill** milestone (M1) before the native file format, because
+crop / bucket / smart-select all sit on a selection-mask data structure
+that must exist first. The file format then serializes Document + layers
++ masks + the new selection primitives in one shot, which means we design
+`.txl` after the model it has to persist is stable.
 
-Nine of ten M0 steps are done (through S9 commit `f133932`). One sweep
-through every DoD bullet remains, then tag.
+Proposed M1 skeleton (user to confirm / redirect):
 
-Walk through every DoD bullet in
-`/home/james/.claude/plans/modular-singing-teacup.md`:
+- **S1** — Selection model: `SelectionMask` type (1-channel float image),
+  `Document::selection()` accessor, compositor + brush engine respect
+  selection alpha (clip paint to selection on write).
+- **S2** — Rectangular marquee tool (Add / Subtract / Intersect
+  modifiers), marching-ants overlay in CanvasView (timer-driven dashed
+  outline of selection edge).
+- **S3** — Bucket fill tool (scanline flood fill + tolerance slider;
+  respects active selection; fills with foreground color).
+- **S4** — Magic wand (color-range flood select with tolerance; builds
+  selection, same tool plumbing as bucket).
+- **S5** — Crop tool (marquee-based canvas resize; undoable by storing
+  old dimensions + tile map).
+- **S6** — `.txl` native format: writer + reader. Contains doc
+  dimensions, per-layer kind/name/visibility/opacity/blend/mask, tile
+  bitmap per layer (stored sparse, matching TuxImage's internal layout),
+  current selection, future-compat version field. ZIP-of-binaries or
+  custom chunked binary — decide at S6 start.
+- **S7** — Verify + tag `v0.1.0-m1`. DoD walkthrough.
 
-1. Launch tuxels; window appears.
-2. File → Open a PNG; layer appears with its filename.
-3. File → New at custom dimensions.
-4. Visibility toggle, opacity slider, blend-mode combo — thumbnails refresh
-   and canvas recomposites. Undo each.
-5. Add / delete / move-up / move-down / activate layers via toolbar and
-   menu. Undo each.
-6. Paint with the brush on a layer. `[` / `]` resize; status bar reports.
-   Undo the stroke.
-7. Layer → Add Layer Mask on the active layer. Paint on the mask (black to
-   hide, white to reveal — default brush color is black, so paint hides).
-   Shift-click the mask thumb to toggle enabled — composite shows the
-   difference. Right-click → Delete Mask. Undo each of those.
-8. Cycle through all 13 blend modes on the green disc in the sample doc
-   and spot-check that each produces a plausible composite.
-9. `Ctrl+Z` / `Ctrl+Shift+Z` — undo and redo through a full session of the
-   above gestures.
-10. Export As PNG — open the result in an external viewer (`xdg-open
-    /tmp/foo.png` or `eog`) and confirm it matches the on-screen
-    composite.
+M2 candidate: **PSD I/O** (start read-only; full PSD write later).
 
-Any regressions found → file under "Known Issues" in STATUS.md and either
-fix or defer with clear notes.
+## When User Confirms M1 Plan
 
-When done and green: `git tag v0.0.1-m0`, append an "M0 complete" entry to
-LOG.md, flip S10 to ✅ in STATUS.md.
-
-## Then — Pick M1
-
-Candidates, ordered by value to user:
-- **Selection tools** (rectangular / lasso) — cornerstone, unlocks
-  fill/stroke/clear within a region.
-- **Text layer** — useful for annotations on exports; drags in
-  FreeType/HarfBuzz.
-- **Adjustment layers** (HSL, Curves, Levels) — high ROI for demos; no I/O
-  dependencies.
-- **PSD I/O** — slow project; start read-only.
-
-Pick one, write a milestone plan into `/home/james/.claude/plans/`, then
-start S1 of that milestone.
+1. Write milestone plan into `/home/james/.claude/plans/` (pick a fresh
+   codename).
+2. Create tasks #1..#7 in the task list, one per step.
+3. Start S1 (selection model). Keep 62-test bar green; add tests per
+   step.
 
 ## Cold-Start Checklist
 
@@ -72,5 +59,5 @@ start S1 of that milestone.
 3. `cat docs/ARCHITECTURE.md` — don't re-derive decisions.
 4. `git log --oneline -10` — recent commits.
 5. `cmake --build build && ctest --test-dir build` — confirm green tree
-   (expect 59 passing tests as of S9).
+   (expect 62 passing tests as of v0.0.1-m0).
 6. Pick up "Immediately Next" above.

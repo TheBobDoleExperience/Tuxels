@@ -7,15 +7,19 @@ namespace tuxels {
 
 void BrushEngine::growBounds(int x0, int y0, int x1, int y1) {
   if (x1 <= x0 || y1 <= y0) return;
-  if (bounds_.isEmpty()) {
-    bounds_ = {x0, y0, x1 - x0, y1 - y0};
-    return;
-  }
-  const int nx = std::min(bounds_.x, x0);
-  const int ny = std::min(bounds_.y, y0);
-  const int nr = std::max(bounds_.right(), x1);
-  const int nb = std::max(bounds_.bottom(), y1);
-  bounds_ = {nx, ny, nr - nx, nb - ny};
+  auto grow = [&](Rect& r) {
+    if (r.isEmpty()) {
+      r = {x0, y0, x1 - x0, y1 - y0};
+      return;
+    }
+    const int nx = std::min(r.x, x0);
+    const int ny = std::min(r.y, y0);
+    const int nr = std::max(r.right(), x1);
+    const int nb = std::max(r.bottom(), y1);
+    r = {nx, ny, nr - nx, nb - ny};
+  };
+  grow(bounds_);
+  grow(incremental_);
 }
 
 void BrushEngine::applyStamp(float cx, float cy) {

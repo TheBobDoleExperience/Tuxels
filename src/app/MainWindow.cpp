@@ -22,6 +22,7 @@
 #include "tools/BrushTool.h"
 #include "ui/CanvasView.h"
 #include "ui/LayersPanel.h"
+#include "ui/ToolsPanel.h"
 
 namespace tuxels {
 
@@ -110,9 +111,25 @@ void MainWindow::buildMenus() {
   sizeDown->setShortcut(QKeySequence(tr("[")));
   connect(sizeDown, &QAction::triggered, this, &MainWindow::onBrushSizeDecrease);
   addAction(sizeDown);
+
+  auto* swap = new QAction(this);
+  swap->setShortcut(QKeySequence(tr("X")));
+  connect(swap, &QAction::triggered, this,
+          [this]() { if (toolsPanel_) toolsPanel_->swapColors(); });
+  addAction(swap);
+
+  auto* reset = new QAction(this);
+  reset->setShortcut(QKeySequence(tr("D")));
+  connect(reset, &QAction::triggered, this,
+          [this]() { if (toolsPanel_) toolsPanel_->resetColors(); });
+  addAction(reset);
 }
 
 void MainWindow::buildDocks() {
+  toolsPanel_ = new ToolsPanel(this);
+  addDockWidget(Qt::LeftDockWidgetArea, toolsPanel_);
+  toolsPanel_->setBrushTool(brushTool_.get());
+
   layersPanel_ = new LayersPanel(this);
   addDockWidget(Qt::RightDockWidgetArea, layersPanel_);
 
@@ -149,13 +166,17 @@ void MainWindow::setDocument(std::unique_ptr<Document> doc) {
   layersPanel_->setDocument(doc_.get());
 }
 
-void MainWindow::refreshAfterUndoRedo() {
+void MainWindow::refreshAfterUndoRedo(Rect dirtyRect) {
   if (!doc_) return;
   if (doc_->activeLayerIndex() >= static_cast<int>(doc_->tree().size())) {
     doc_->setActiveLayerIndex(static_cast<int>(doc_->tree().size()) - 1);
   }
   layersPanel_->refresh();
-  canvas_->requestRecomposite();
+  if (dirtyRect.isEmpty()) {
+    canvas_->requestRecomposite();
+  } else {
+    canvas_->requestRecomposite(dirtyRect);
+  }
 }
 
 void MainWindow::populateSampleDocument() {
@@ -387,14 +408,16 @@ void MainWindow::onLayerPainted() {
 
 void MainWindow::onEditUndo() {
   if (!undoStack_) return;
-  undoStack_->undo();
-  refreshAfterUndoRedo();
+  const auto r = undoStack_->undo();
+  if (!r.touched) return;
+  refreshAfterUndoRedo(r.dirtyRect);
 }
 
 void MainWindow::onEditRedo() {
   if (!undoStack_) return;
-  undoStack_->redo();
-  refreshAfterUndoRedo();
+  const auto r = undoStack_->redo();
+  if (!r.touched) return;
+  refreshAfterUndoRedo(r.dirtyRect);
 }
 
 void MainWindow::onLayerVisibilityChange(LayerBase* layer, bool oldVal, bool newVal) {
@@ -549,6 +572,8 @@ void MainWindow::onBrushSizeIncrease() {
   const int d = brushTool_->brush().diameter();
   const int step = std::max(1, d / 10);
   brushTool_->brush().setDiameter(d + step);
+  if (toolsPanel_) toolsPanel_->refreshFromBrush();
+  if (canvas_) canvas_->refreshBrushCursor();
   statusBar()->showMessage(
       tr("Brush size: %1").arg(brushTool_->brush().diameter()), 1500);
 }
@@ -558,6 +583,8 @@ void MainWindow::onBrushSizeDecrease() {
   const int d = brushTool_->brush().diameter();
   const int step = std::max(1, d / 10);
   brushTool_->brush().setDiameter(d - step);
+  if (toolsPanel_) toolsPanel_->refreshFromBrush();
+  if (canvas_) canvas_->refreshBrushCursor();
   statusBar()->showMessage(
       tr("Brush size: %1").arg(brushTool_->brush().diameter()), 1500);
 }

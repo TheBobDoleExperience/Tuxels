@@ -1,10 +1,14 @@
 # Tuxels — Current Status
 
-**One-paragraph summary:** Project bootstrap in progress. SCOPE.md (aspirational blueprint) was written 2026-04-17 and is the single source of truth for long-term vision. Milestone M0 (minimal editor: layers + brush + blend + mask + undo + PNG I/O) is planned at `/home/james/.claude/plans/modular-singing-teacup.md`. As of 2026-04-20 we are in step **S1** — scaffolding and workflow infrastructure.
+**One-paragraph summary:** Milestone **M0 shipped** as `v0.0.1-m0` on 2026-04-20 — a runnable Qt6 minimal editor with tiled float-RGBA layers, 13 blend modes, round-brush painting with a tools panel, raster masks, tile-COW undo/redo, PNG import/export, partial-rect recompose, and a brush-size cursor ring. 62 unit tests green. SCOPE.md (the aspirational long-term blueprint, 2026-04-17) remains the source of truth for vision. Next up: **M1 planning** — user has asked for more tools (crop, bucket, smart selection) plus a `.txl` native file format before PSD.
 
-## Current Milestone: M0 — Minimal Editor Bootstrap
+## Current Milestone: M1 — Planning
 
-**Definition of Done:** Runnable Qt6 app that opens PNG, stacks pixel layers with opacity + 13 PS blend modes, paints with a round brush on layer or raster mask, undo/redo, exports flat PNG.
+See `NEXT.md` for M1 candidate scope.
+
+## Previous Milestone: M0 — Minimal Editor Bootstrap ✅
+
+**Definition of Done:** Runnable Qt6 app that opens PNG, stacks pixel layers with opacity + 13 PS blend modes, paints with a round brush on layer or raster mask, undo/redo, exports flat PNG. **Shipped 2026-04-20 as tag `v0.0.1-m0`.**
 
 ## Step Progress
 
@@ -19,7 +23,7 @@
 | S7 — Brush engine + BrushTool | ✅ done | 2026-04-20; 54 tests passing |
 | S8 — Undo/redo with tile COW | ✅ done | 2026-04-20; 59 tests passing |
 | S9 — Layer masks in UI | ✅ done | 2026-04-20; 59 tests passing |
-| S10 — Verify + tag v0.0.1-m0 | in_progress | 2026-04-20; user is mid-walkthrough, tag deferred until sign-off |
+| S10 — Verify + tag v0.0.1-m0 | ✅ done | 2026-04-20; ToolsPanel + partial-recompose + Command::dirtyRect undo path + brush cursor ring; user re-verified all 13 DoD items; tagged `v0.0.1-m0`; 62 tests |
 
 ## What Works Right Now
 
@@ -32,6 +36,9 @@
 - Click-drag on the canvas paints a round brush onto the active pixel layer. Brush kernel has hard/soft falloff (hardness ∈ [0,1]) and honors opacity × flow per stamp; spacing is diameter × 10%. `[` / `]` shrink/grow the brush diameter; status bar reports new size. Layer thumbnails refresh on stroke end.
 - `Edit → Undo` / `Edit → Redo` (Ctrl+Z / Ctrl+Shift+Z) reverse and replay: paint strokes (via tile-COW snapshots — only touched tiles are recorded), add/delete/reorder layers, visibility toggles, blend-mode changes, and opacity slider commits (one entry per drag, coalesced on release). Undo depth: 64.
 - `Layer → Add Layer Mask` attaches a white (fully-reveal) raster mask to the active pixel layer and switches paint target to mask. The layers panel shows a second thumbnail next to the layer thumb; click a thumb to choose paint target (layer or mask), shift-click the mask thumb to toggle enabled (disabled mask has a red tint overlay), right-click for "Delete Mask". All mask ops are undoable.
+- **Tools dock (left)**: foreground/background color swatches (click → color picker, X swaps, D resets to black/white) plus size / hardness / opacity / flow sliders that drive the live brush. `[`/`]` and the dock stay in sync.
+- **Paint latency fix**: `compose(tree, out, Rect)` overload restricts the tile loop to tiles touched by the current stamp; the canvas partial-recomposites and partial-uploads only those rows per mouse tick. Structural ops (layer add/delete/reorder, blend/opacity/visibility changes) still full-recompose; paint-stroke undo/redo goes through the partial path via `Command::dirtyRect()` which `PaintCommand` computes from its tile snapshot.
+- **Brush cursor ring**: concentric black/white 1-px ellipses centered on the cursor, sized to the active tool's `cursorRadiusPx()` × zoom. Only the ring's widget rect is invalidated per mouse move (partial `update()`), so the preview is cheap. `[`/`]` refresh it live.
 
 ## What Is Broken / Known Issues
 

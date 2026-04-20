@@ -81,15 +81,17 @@ Exclusion:    C = Cs + Cd - 2*Cs*Cd
 
 ## 7. Compositor
 
-- `compose(const LayerTree& tree, const Rect& viewport, TuxImage& out)` in `src/compositor/compose.cpp`.
-- Walk tile coordinates spanning `viewport`. For each tile coord:
+- Two overloads in `src/compositor/compose.cpp`:
+  - `compose(tree, out)` — full recompose over all tiles intersecting the image.
+  - `compose(tree, out, Rect pixelRect)` — restrict the tile loop to tiles intersecting `pixelRect` (clipped to image bounds). Used on the paint hot path so a brush stamp only re-touches the tiles it lands on. Both paths go through the same inner `composeTileRange` helper.
+- Walk tile coordinates spanning the target range. For each tile coord:
   - Start with transparent accumulator (`Rgba32F{0,0,0,0}`).
   - For each layer (bottom to top) if visible:
     - `renderTile` → get layer tile contribution.
     - Multiply layer alpha by `opacity` and mask value (if mask present and enabled).
     - Blend using `layer.blend` against accumulator.
   - Write accumulator into the corresponding tile of `out`.
-- **Dirty region invalidation:** layer mutations mark affected tile coords in a `DirtySet`; `CanvasView` composites only dirty tiles to a cached final `TuxImage`.
+- **Dirty-rect path for paint:** `BrushEngine` tracks `incremental_` in addition to total `bounds_`; each stamp grows both. `ToolBase::takeDirtyRect()` (default empty, `BrushTool` forwards from the engine) drains the rect. `CanvasView` unions incoming rects into `dirtyRect_`; its `paintEvent` calls `compose(tree, out, dirtyRect_)` when set (partial) or `compose(tree, out)` otherwise (full). Only the rows of the cached `QImage` inside the dirty rect are re-quantized, and `QWidget::update(QRect)` limits Qt's repaint area. Full recompose is still used for structural ops (layer reorder, blend/opacity/visibility change, mask toggle, undo/redo) where the dirty region isn't trivially available.
 - Single-threaded CPU for M0. Multi-thread per-tile (std::async or thread pool) is a simple drop-in for later.
 
 ## 8. Color Management (M0 scope)
@@ -121,9 +123,17 @@ Exclusion:    C = Cs + Cd - 2*Cs*Cd
 
 ## 11. Tools
 
-- `ToolBase` abstract: `mousePressEvent`, `mouseMoveEvent`, `mouseReleaseEvent`, `wheelEvent`, `keyPressEvent` — all take canvas-space pixel coords + modifiers.
+- `ToolBase` abstract: `press` / `move` / `release` with image-space (x, y) + `MouseButton`. Plus `takeDirtyRect()` returning the pixels newly dirtied since the last call (default empty; `BrushTool` overrides to drain the engine's incremental rect).
 - `BrushTool` for M0. Move/Select/etc. are stubs.
-- Active tool held by `MainWindow`, forwarded to `CanvasView` via signals/slots.
+- Active tool held by `MainWindow`, forwarded to `CanvasView` via `setTool()`.
+
+### ToolsPanel (UI — left dock)
+
+- `src/ui/ToolsPanel.{h,cpp}`. QDockWidget parked in `Qt::LeftDockWidgetArea`.
+- Foreground/background color swatches: `QColorDialog` on click; `X` (also a global shortcut) swaps; `D` resets to black/white.
+- Sliders for size (1–500 + a 1–2048 spinbox for precise entry), hardness / opacity / flow (0–100%, mapped to the brush's 0–1 params).
+- No intermediate model: edits go straight into the live `RoundBrush`. `refreshFromBrush()` pulls current params back out so `[`/`]` diameter nudges stay in sync.
+- Internal `Swatch` widget is a plain `QFrame` subclass in an anonymous namespace, no `Q_OBJECT` — uses a stored `std::function` callback instead of a signal, which keeps it off AutoMOC's radar and fully self-contained in the `.cpp`.
 
 ## 12. Brush
 

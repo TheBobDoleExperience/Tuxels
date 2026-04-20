@@ -8,15 +8,15 @@
 
 namespace tuxels {
 
-void compose(const LayerTree& tree, TuxImage& out) {
-  if (out.width() <= 0 || out.height() <= 0) return;
-  const Rect tb = out.tileBounds();
+namespace {
 
+void composeTileRange(const LayerTree& tree, TuxImage& out, int tx0, int ty0,
+                      int tx1, int ty1) {
   std::vector<Rgba32F> accum(kTilePixels);
   std::vector<Rgba32F> layerTile(kTilePixels);
 
-  for (int ty = tb.y; ty < tb.y + tb.h; ++ty) {
-    for (int tx = tb.x; tx < tb.x + tb.w; ++tx) {
+  for (int ty = ty0; ty < ty1; ++ty) {
+    for (int tx = tx0; tx < tx1; ++tx) {
       const TileCoord tc{tx, ty};
       std::fill(accum.begin(), accum.end(), Rgba32F::transparent());
 
@@ -43,7 +43,6 @@ void compose(const LayerTree& tree, TuxImage& out) {
 
             float maskV = 1.f;
             if (hasMask) {
-              // Absent mask tile defaults to 1.0 (full reveal).
               maskV = maskTile ? maskTile->data()[idx].r : 1.f;
             }
             const float alphaFactor = opacity * maskV;
@@ -69,6 +68,38 @@ void compose(const LayerTree& tree, TuxImage& out) {
       }
     }
   }
+}
+
+}  // namespace
+
+void compose(const LayerTree& tree, TuxImage& out) {
+  if (out.width() <= 0 || out.height() <= 0) return;
+  const Rect tb = out.tileBounds();
+  composeTileRange(tree, out, tb.x, tb.y, tb.x + tb.w, tb.y + tb.h);
+}
+
+void compose(const LayerTree& tree, TuxImage& out, Rect pixelRect) {
+  if (out.width() <= 0 || out.height() <= 0) return;
+  if (pixelRect.isEmpty()) return;
+  const Rect tb = out.tileBounds();
+
+  // Clip to the image's pixel bounds, then map to inclusive tile indices.
+  const int px0 = std::max(0, pixelRect.x);
+  const int py0 = std::max(0, pixelRect.y);
+  const int px1 = std::min(out.width(), pixelRect.right());
+  const int py1 = std::min(out.height(), pixelRect.bottom());
+  if (px1 <= px0 || py1 <= py0) return;
+
+  auto divFloor = [](int a, int b) {
+    return (a / b) - (((a % b) != 0) && ((a ^ b) < 0) ? 1 : 0);
+  };
+  const int tx0 = std::max(tb.x, divFloor(px0, kTilePx));
+  const int ty0 = std::max(tb.y, divFloor(py0, kTilePx));
+  const int tx1 = std::min(tb.x + tb.w, divFloor(px1 - 1, kTilePx) + 1);
+  const int ty1 = std::min(tb.y + tb.h, divFloor(py1 - 1, kTilePx) + 1);
+  if (tx1 <= tx0 || ty1 <= ty0) return;
+
+  composeTileRange(tree, out, tx0, ty0, tx1, ty1);
 }
 
 }  // namespace tuxels

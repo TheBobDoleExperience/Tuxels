@@ -47,6 +47,8 @@ add_executable(tuxels
   src/ui/LayerRowWidget.cpp
   src/ui/LayersPanel.h
   src/ui/LayersPanel.cpp
+  src/ui/ToolsPanel.h
+  src/ui/ToolsPanel.cpp
 )
 target_include_directories(tuxels PRIVATE src)
 target_link_libraries(tuxels PRIVATE

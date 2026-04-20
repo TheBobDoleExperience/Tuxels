@@ -4,9 +4,18 @@
 #include <deque>
 #include <memory>
 
+#include "core/TuxImage.h"
 #include "history/Command.h"
 
 namespace tuxels {
+
+// Return value for undo()/redo(): a pixel rect that callers can use to
+// partial-recomposite. Empty rect + `touched == true` means "something
+// happened but the rect isn't computable — recompose everything."
+struct UndoResult {
+  bool touched = false;
+  Rect dirtyRect;
+};
 
 class UndoStack {
  public:
@@ -23,20 +32,24 @@ class UndoStack {
   bool canUndo() const noexcept { return !undo_.empty(); }
   bool canRedo() const noexcept { return !redo_.empty(); }
 
-  void undo() {
-    if (undo_.empty()) return;
+  UndoResult undo() {
+    if (undo_.empty()) return {};
     auto cmd = std::move(undo_.back());
     undo_.pop_back();
     cmd->undo();
+    UndoResult r{true, cmd->dirtyRect()};
     redo_.push_back(std::move(cmd));
+    return r;
   }
 
-  void redo() {
-    if (redo_.empty()) return;
+  UndoResult redo() {
+    if (redo_.empty()) return {};
     auto cmd = std::move(redo_.back());
     redo_.pop_back();
     cmd->redo();
+    UndoResult r{true, cmd->dirtyRect()};
     undo_.push_back(std::move(cmd));
+    return r;
   }
 
   void clear() {
