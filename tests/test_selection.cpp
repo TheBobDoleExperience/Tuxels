@@ -338,6 +338,55 @@ TEST(marquee_drag_outside_doc_replace_deselects) {
   CHECK(c->after == nullptr);
 }
 
+TEST(marquee_persistent_mode_drives_combine_without_modifiers) {
+  // When no modifier keys are held at press time, the marquee uses its
+  // persistent mode (driven by the options-row buttons) instead of
+  // Replace. This keeps Subtract/Intersect reachable on WMs that eat
+  // Alt-drag for window-move.
+  Document doc(40, 40);
+  auto initial = std::make_unique<SelectionMask>(40, 40);
+  initial->fillRect(Rect{0, 0, 20, 20}, 1.f);
+  doc.setSelection(std::move(initial));
+
+  MarqueeTool m;
+  m.setMode(SelectionMode::Subtract);
+  m.setModifiers(Mod::None);
+  m.press(doc, 10.f, 10.f, MouseButton::Left);
+  m.move(doc, 15.f, 15.f);
+  m.release(doc, 15.f, 15.f, MouseButton::Left);
+  auto c = m.takeCommit();
+  CHECK(c.has_value());
+  CHECK(c->after != nullptr);
+  // Hole carved at (10..15, 10..15); (0,0) still selected, (10,10) not.
+  CHECK_NEAR(c->after->sample(0, 0), 1.f, 1e-5f);
+  CHECK_NEAR(c->after->sample(10, 10), 0.f, 1e-5f);
+  CHECK_NEAR(c->after->sample(15, 15), 0.f, 1e-5f);
+  CHECK_NEAR(c->after->sample(19, 19), 1.f, 1e-5f);
+}
+
+TEST(marquee_modifiers_override_persistent_mode) {
+  // Modifiers held at press time win over the persistent mode — preserves
+  // the Photoshop temporary-override semantics when the WM cooperates.
+  Document doc(40, 40);
+  auto initial = std::make_unique<SelectionMask>(40, 40);
+  initial->fillRect(Rect{0, 0, 20, 20}, 1.f);
+  doc.setSelection(std::move(initial));
+
+  MarqueeTool m;
+  m.setMode(SelectionMode::Subtract);  // persistent says subtract...
+  m.setModifiers(Mod::Shift);          // ...but shift-press says add.
+  m.press(doc, 25.f, 25.f, MouseButton::Left);
+  m.move(doc, 30.f, 30.f);
+  m.release(doc, 30.f, 30.f, MouseButton::Left);
+  auto c = m.takeCommit();
+  CHECK(c.has_value());
+  CHECK(c->after != nullptr);
+  // Both regions should be selected (union), proving Shift won over Subtract.
+  CHECK_NEAR(c->after->sample(0, 0), 1.f, 1e-5f);
+  CHECK_NEAR(c->after->sample(25, 25), 1.f, 1e-5f);
+  CHECK_NEAR(c->after->sample(30, 30), 1.f, 1e-5f);
+}
+
 }  // namespace tuxels
 
 int main() { return tuxels::testing::run(); }

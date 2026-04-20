@@ -97,6 +97,52 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
   pickerLayout->addStretch(1);
   vbox->addWidget(pickerRow);
 
+  // -- Marquee options (visible only when Marquee is active) -------------
+  // A persistent-mode row (New/Add/Subtract/Intersect) so Subtract and
+  // Intersect stay reachable on window managers that grab Alt-drag for
+  // window-move (GNOME default).
+  marqueeGroup_ = new QWidget(root);
+  auto* marqueeVbox = new QVBoxLayout(marqueeGroup_);
+  marqueeVbox->setContentsMargins(0, 0, 0, 0);
+  marqueeVbox->setSpacing(4);
+  auto* marqueeHeader = new QLabel(tr("<b>Marquee</b>"), marqueeGroup_);
+  marqueeVbox->addWidget(marqueeHeader);
+  auto* modeRow = new QWidget(marqueeGroup_);
+  auto* modeLayout = new QHBoxLayout(modeRow);
+  modeLayout->setContentsMargins(0, 0, 0, 0);
+  modeLayout->setSpacing(4);
+  auto* modeGroup = new QButtonGroup(this);
+  modeGroup->setExclusive(true);
+  auto makeModeBtn = [&](const QString& text, const QString& tip,
+                         SelectionMode m, bool checked) {
+    auto* b = new QToolButton(modeRow);
+    b->setText(text);
+    b->setToolTip(tip);
+    b->setCheckable(true);
+    b->setChecked(checked);
+    modeGroup->addButton(b);
+    modeLayout->addWidget(b);
+    connect(b, &QToolButton::clicked, this,
+            [this, m]() { emit marqueeModeChanged(m); });
+    return b;
+  };
+  marqueeReplaceBtn_ =
+      makeModeBtn("New", tr("Replace selection  (no modifier)"),
+                  SelectionMode::Replace, true);
+  marqueeAddBtn_ =
+      makeModeBtn("+", tr("Add to selection  (Shift)"), SelectionMode::Add,
+                  false);
+  marqueeSubtractBtn_ =
+      makeModeBtn("−", tr("Subtract from selection  (Alt)"),
+                  SelectionMode::Subtract, false);
+  marqueeIntersectBtn_ =
+      makeModeBtn("∩", tr("Intersect with selection  (Shift+Alt)"),
+                  SelectionMode::Intersect, false);
+  modeLayout->addStretch(1);
+  marqueeVbox->addWidget(modeRow);
+  marqueeGroup_->setVisible(false);
+  vbox->addWidget(marqueeGroup_);
+
   // -- Brush group (hidden when non-brush tools are active) ---------------
   brushGroup_ = new QWidget(root);
   auto* brushVbox = new QVBoxLayout(brushGroup_);
@@ -205,6 +251,15 @@ void ToolsPanel::setActiveTool(ToolId id) {
   if (pickBrushBtn_) pickBrushBtn_->setChecked(id == ToolId::Brush);
   if (pickMarqueeBtn_) pickMarqueeBtn_->setChecked(id == ToolId::Marquee);
   if (brushGroup_) brushGroup_->setVisible(id == ToolId::Brush);
+  if (marqueeGroup_) marqueeGroup_->setVisible(id == ToolId::Marquee);
+}
+
+void ToolsPanel::setMarqueeMode(SelectionMode m) {
+  // Only `clicked` is wired (not `toggled`), so setChecked is silent.
+  if (marqueeReplaceBtn_)   marqueeReplaceBtn_->setChecked(m == SelectionMode::Replace);
+  if (marqueeAddBtn_)       marqueeAddBtn_->setChecked(m == SelectionMode::Add);
+  if (marqueeSubtractBtn_)  marqueeSubtractBtn_->setChecked(m == SelectionMode::Subtract);
+  if (marqueeIntersectBtn_) marqueeIntersectBtn_->setChecked(m == SelectionMode::Intersect);
 }
 
 void ToolsPanel::setBrushTool(BrushTool* tool) {

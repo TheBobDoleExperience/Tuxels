@@ -51,6 +51,14 @@ class MarqueeTool : public ToolBase {
     return out;
   }
 
+  // Persistent combine mode, driven by the marquee options in ToolsPanel.
+  // Defaults to Replace. A drag uses this unless modifier keys are held at
+  // press time, in which case modifiers win (so the Photoshop Shift/Alt
+  // temporary-override still works on systems where the WM doesn't eat the
+  // Alt key for window gestures).
+  void setMode(SelectionMode m) noexcept { persistentMode_ = m; }
+  SelectionMode mode() const noexcept { return persistentMode_; }
+
  private:
   Rect computeRect() const;
   static SelectionMode modeFromModifiers(int mods);
@@ -60,6 +68,7 @@ class MarqueeTool : public ToolBase {
   int curX_ = 0, curY_ = 0;
   int pressMods_ = 0;
   int docW_ = 0, docH_ = 0;
+  SelectionMode persistentMode_ = SelectionMode::Replace;
   std::optional<PendingCommit> pending_;
 };
 

@@ -1,6 +1,6 @@
 # Tuxels — Current Status
 
-**One-paragraph summary:** Milestone **M0 shipped** as `v0.0.1-m0` on 2026-04-20 (commit `be87b70`). **M1 in progress** — S1 (selection model + brush clipping + Select menu) and S2 (rectangular marquee tool + marching-ants overlay + tool picker) both landed 2026-04-20. 84 unit tests green (9 new in `test_selection` for marquee modes). Plan: `/home/james/.claude/plans/steady-framing-willow.md`.
+**One-paragraph summary:** Milestone **M0 shipped** as `v0.0.1-m0` on 2026-04-20 (commit `be87b70`). **M1 in progress** — S1 (selection model + brush clipping + Select menu) and S2 (rectangular marquee tool + marching-ants overlay + tool picker) both landed 2026-04-20. S2 follow-up: persistent marquee combine mode (New/Add/Subtract/Intersect) exposed as an options row, so Subtract/Intersect stay reachable on WMs that grab Alt-drag for window-move (GNOME default). 86 unit tests green (2 new in `test_selection` for persistent-mode behavior). Plan: `/home/james/.claude/plans/steady-framing-willow.md`.
 
 ## Current Milestone: M1 — Selection, Fill, and Native Format
 
@@ -11,7 +11,7 @@
 | Step | State | Notes |
 |------|-------|-------|
 | S1 — SelectionMask + brush clipping + Select menu | ✅ done | 2026-04-20; 75 tests passing (13 new in `test_selection`) |
-| S2 — Rectangular marquee + marching ants | ✅ done | 2026-04-20; 84 tests passing (+9 marquee mode/edge cases); tool picker + B/M shortcuts |
+| S2 — Rectangular marquee + marching ants | ✅ done | 2026-04-20; 86 tests passing (+9 marquee mode/edge cases, +2 persistent-mode); tool picker + B/M shortcuts; persistent combine mode buttons (New/+/−/∩) as WM-hijack-proof alternative to Alt modifier |
 | S3 — Bucket fill + scanline flood | pending | — |
 | S4 — Magic wand (smart selection) | pending | — |
 | S5 — Crop tool + canvas resize | pending | — |
@@ -53,6 +53,7 @@
 - **Brush cursor ring**: concentric black/white 1-px ellipses centered on the cursor, sized to the active tool's `cursorRadiusPx()` × zoom. Only the ring's widget rect is invalidated per mouse move (partial `update()`), so the preview is cheap. `[`/`]` refresh it live.
 - **Selection model** (M1-S1): `core/SelectionMask` (1-channel over a document-sized `TuxImage`, tile-sparse fillRect/combine/invert/clone). `Document::selection()` is a nullable `unique_ptr<SelectionMask>`; null = "no selection". `BrushEngine` multiplies per-pixel deposit by `selection->sample(x,y)` so strokes are clipped to the active selection. `Select` menu wired: `All` (Ctrl+A), `Deselect` (Ctrl+D), `Inverse` (Ctrl+Shift+I) — each undoable via a dedicated `SelectionCommand`.
 - **Marquee + ants** (M1-S2): ToolsPanel has a picker row with Brush (B) / Marquee (M) buttons. With the Marquee tool active, drag on the canvas builds a rectangular selection; modifiers at press time pick the combine mode — plain = Replace, Shift = Add, Alt = Subtract, Shift+Alt = Intersect. Live rubber-band dashed rect tracks the drag; on release a `SelectionCommand` commits the before/after pair (so the marquee is undoable). A 10 Hz `QTimer` animates the marching-ants overlay (black solid under white dashed, `dashOffset` rotates) around the selection boundary; only the selection's widget-space bbox repaints per tick. The Shift-for-pan gesture is suppressed when the Marquee is active, so Shift+Left adds to the selection instead of panning.
+- **Marquee persistent mode** (M1-S2 follow-up): ToolsPanel reveals a Marquee options row with four combine-mode buttons (New / + / − / ∩) when the Marquee tool is active. The selected button drives the combine mode for drags with no modifier keys held at press time; holding Shift / Alt / Shift+Alt still temporarily overrides per Photoshop. This keeps Subtract and Intersect reachable on Linux WMs (GNOME default) that consume Alt-drag for window-move before Qt receives the event.
 
 ## What Is Broken / Known Issues
 

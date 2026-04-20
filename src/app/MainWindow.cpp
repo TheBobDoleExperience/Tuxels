@@ -159,6 +159,11 @@ void MainWindow::buildDocks() {
   toolsPanel_->setActiveTool(activeToolId_);
   connect(toolsPanel_, &ToolsPanel::toolPicked, this,
           &MainWindow::onToolPicked);
+  connect(toolsPanel_, &ToolsPanel::marqueeModeChanged, this,
+          [this](SelectionMode m) {
+            if (marqueeTool_) marqueeTool_->setMode(m);
+          });
+  if (marqueeTool_) toolsPanel_->setMarqueeMode(marqueeTool_->mode());
 
   layersPanel_ = new LayersPanel(this);
   addDockWidget(Qt::RightDockWidgetArea, layersPanel_);

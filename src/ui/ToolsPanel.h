@@ -3,6 +3,7 @@
 #include <QColor>
 #include <QDockWidget>
 
+#include "core/SelectionMask.h"
 #include "tools/ToolId.h"
 
 class QFrame;
@@ -40,10 +41,21 @@ class ToolsPanel : public QDockWidget {
   // shortcut so the button state stays in sync.
   void setActiveTool(ToolId id);
 
+  // Reflect the marquee's persistent combine mode in the options row
+  // (without emitting marqueeModeChanged). Used when the mode is driven
+  // from outside the panel (e.g., future keyboard shortcuts).
+  void setMarqueeMode(SelectionMode m);
+
  signals:
   // Fired when the user clicks a picker button. MainWindow wires this to
   // actually swap the active tool on CanvasView.
   void toolPicked(ToolId id);
+
+  // Fired when the user picks a marquee combine mode (New/Add/Subtract/
+  // Intersect). MainWindow wires this to MarqueeTool::setMode. Exists so
+  // Subtract/Intersect stay reachable on WMs that grab Alt-drag for
+  // window-move.
+  void marqueeModeChanged(SelectionMode m);
 
  public slots:
   void swapColors();
@@ -69,6 +81,11 @@ class ToolsPanel : public QDockWidget {
   QToolButton* pickBrushBtn_ = nullptr;
   QToolButton* pickMarqueeBtn_ = nullptr;
   QWidget* brushGroup_ = nullptr;
+  QWidget* marqueeGroup_ = nullptr;
+  QToolButton* marqueeReplaceBtn_ = nullptr;
+  QToolButton* marqueeAddBtn_ = nullptr;
+  QToolButton* marqueeSubtractBtn_ = nullptr;
+  QToolButton* marqueeIntersectBtn_ = nullptr;
 
   QFrame* fgSwatch_ = nullptr;
   QFrame* bgSwatch_ = nullptr;

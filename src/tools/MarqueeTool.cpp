@@ -53,7 +53,13 @@ void MarqueeTool::release(Document& doc, float x, float y, MouseButton btn) {
   const int y1 = std::min(r.bottom(), docH_);
   const bool emptyDrag = (x1 <= x0 || y1 <= y0);
 
-  const SelectionMode mode = modeFromModifiers(pressMods_);
+  // Modifiers held at press time win over the persistent mode; this
+  // preserves the Photoshop Shift/Alt temporary-override on systems where
+  // the WM doesn't grab Alt-drag for window-move. If neither Shift nor Alt
+  // was held, fall through to the persistent mode set via the options row.
+  const bool modsHeld = (pressMods_ & (Mod::Shift | Mod::Alt)) != 0;
+  const SelectionMode mode =
+      modsHeld ? modeFromModifiers(pressMods_) : persistentMode_;
 
   auto before = doc.selection() ? doc.selection()->clone() : nullptr;
 
