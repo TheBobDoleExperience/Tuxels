@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <functional>
 
 #include "core/SelectionMask.h"
 
@@ -25,15 +27,38 @@ void BrushEngine::growBounds(int x0, int y0, int x1, int y1) {
 }
 
 void BrushEngine::applyStamp(float cx, float cy) {
-  const int D = brush_.diameter();
+  const auto& p = brush_.params();
+  const bool jitter = (p.sizeJitter > 0.f) || (p.opacityJitter > 0.f);
+
+  int D;
+  const float* kernelData;
+  float opEff;
+
+  if (!jitter) {
+    // Base path: untouched by S6, must stay bitwise identical to M2-S5
+    // output when jitter is zero.
+    D = brush_.diameter();
+    kernelData = nullptr;  // sampled via brush_.kernel below
+    opEff = p.opacity;
+  } else {
+    std::uniform_real_distribution<float> U(-1.f, 1.f);
+    const float baseD = static_cast<float>(brush_.diameter());
+    const float sizeScale = 1.f + p.sizeJitter * U(rng_);
+    const float jitteredD = std::max(1.f, std::round(baseD * sizeScale));
+    // Cap at 2× the base so large jitter doesn't blow up the stamp cost.
+    D = std::min(static_cast<int>(jitteredD), brush_.diameter() * 2);
+    D = std::max(1, D);
+    RoundBrush::buildKernel(D, p.hardness, stampKernel_);
+    kernelData = stampKernel_.data();
+    const float opScale = 1.f + p.opacityJitter * U(rng_);
+    opEff = std::clamp(p.opacity * opScale, 0.f, 1.f);
+  }
+
+  const Rgba32F col = p.color;
+  const float flow = p.flow;
   const float radius = D * 0.5f;
   const int x0 = static_cast<int>(std::floor(cx - radius));
   const int y0 = static_cast<int>(std::floor(cy - radius));
-
-  const auto& p = brush_.params();
-  const Rgba32F col = p.color;
-  const float op = p.opacity;
-  const float flow = p.flow;
 
   const int xMin = std::max(0, x0);
   const int yMin = std::max(0, y0);
@@ -43,11 +68,14 @@ void BrushEngine::applyStamp(float cx, float cy) {
 
   for (int y = yMin; y < yMax; ++y) {
     for (int x = xMin; x < xMax; ++x) {
-      const float k = brush_.kernel(x - x0, y - y0);
+      const int lx = x - x0;
+      const int ly = y - y0;
+      const float k = kernelData ? kernelData[ly * D + lx]
+                                 : brush_.kernel(lx, ly);
       if (k <= 0.f) continue;
       const float s = selection_ ? selection_->sample(x, y) : 1.f;
       if (s <= 0.f) continue;
-      const float a = k * op * flow * col.a * s;
+      const float a = k * opEff * flow * col.a * s;
       if (a <= 0.f) continue;
       const Rgba32F surface = target_.getPixel(x, y);
       const float inv = 1.f - a;
@@ -63,6 +91,18 @@ void BrushEngine::applyStamp(float cx, float cy) {
 }
 
 void BrushEngine::beginStroke(float x, float y) {
+  // Seed the stroke's RNG. Counter-based by default; tests can pin via
+  // setNextStrokeSeedForTesting. Only consumed at stroke boundaries so
+  // single-stamp output is independent of prior stroke history.
+  std::uint64_t seedSrc;
+  if (havePinnedSeed_) {
+    seedSrc = pinnedSeed_;
+    havePinnedSeed_ = false;
+  } else {
+    seedSrc = ++strokeIdCounter_;
+  }
+  rng_.seed(static_cast<std::mt19937::result_type>(
+      std::hash<std::uint64_t>{}(seedSrc)));
   active_ = true;
   lastX_ = x;
   lastY_ = y;

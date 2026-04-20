@@ -108,6 +108,7 @@ tuxels_add_test(test_transform_tool)
 tuxels_add_test(test_polygon_fill)
 tuxels_add_test(test_lasso_tool)
 tuxels_add_test(test_select_by_color)
+tuxels_add_test(test_brush_dynamics)
 
 add_executable(test_png_io tests/test_png_io.cpp)
 set_target_properties(test_png_io PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)

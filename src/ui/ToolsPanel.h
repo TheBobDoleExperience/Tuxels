@@ -109,6 +109,9 @@ class ToolsPanel : public QDockWidget {
   void onHardnessChanged(int v);
   void onOpacityChanged(int v);
   void onFlowChanged(int v);
+  void onSizeJitterChanged(int v);
+  void onOpacityJitterChanged(int v);
+  void onSpacingChanged(int v);
   void onBucketToleranceChanged(int v);
   void onBucketOpacityChanged(int v);
   void onWandToleranceChanged(int v);
@@ -178,6 +181,12 @@ class ToolsPanel : public QDockWidget {
   QLabel* opacityLabel_ = nullptr;
   QSlider* flowSlider_ = nullptr;
   QLabel* flowLabel_ = nullptr;
+  QSlider* sizeJitterSlider_ = nullptr;
+  QLabel* sizeJitterLabel_ = nullptr;
+  QSlider* opacityJitterSlider_ = nullptr;
+  QLabel* opacityJitterLabel_ = nullptr;
+  QSlider* spacingSlider_ = nullptr;
+  QLabel* spacingLabel_ = nullptr;
 };
 
 }  // namespace tuxels

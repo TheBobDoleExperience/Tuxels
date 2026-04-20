@@ -478,6 +478,39 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
           &ToolsPanel::onFlowChanged);
   form->addRow(tr("Flow"), flowRow);
 
+  // Dynamics: per-stamp size + opacity jitter (0–100%, 0 disables) and a
+  // spacing slider that maps to spacingRatio ∈ [0.01, 1.0]. These three
+  // rows are the user-facing surface for S6 brush dynamics.
+  auto* sizeJitterRow = makePctRow(sizeJitterSlider_, sizeJitterLabel_);
+  sizeJitterSlider_->setValue(0);
+  sizeJitterLabel_->setText("0%");
+  sizeJitterRow->setToolTip(
+      tr("Size jitter — per-stamp random size variation"));
+  connect(sizeJitterSlider_, &QSlider::valueChanged, this,
+          &ToolsPanel::onSizeJitterChanged);
+  form->addRow(tr("Size Jitter"), sizeJitterRow);
+
+  auto* opJitterRow = makePctRow(opacityJitterSlider_, opacityJitterLabel_);
+  opacityJitterSlider_->setValue(0);
+  opacityJitterLabel_->setText("0%");
+  opJitterRow->setToolTip(
+      tr("Opacity jitter — per-stamp random opacity variation"));
+  connect(opacityJitterSlider_, &QSlider::valueChanged, this,
+          &ToolsPanel::onOpacityJitterChanged);
+  form->addRow(tr("Opacity Jitter"), opJitterRow);
+
+  auto* spacingRow = makePctRow(spacingSlider_, spacingLabel_);
+  // Slider is in percent (1–100), maps linearly onto spacingRatio ∈
+  // [0.01, 1.0]. Default matches RoundBrushParams' 0.1 → 10%.
+  spacingSlider_->setRange(1, 100);
+  spacingSlider_->setValue(10);
+  spacingLabel_->setText("10%");
+  spacingRow->setToolTip(
+      tr("Spacing — stamp interval as fraction of brush size"));
+  connect(spacingSlider_, &QSlider::valueChanged, this,
+          &ToolsPanel::onSpacingChanged);
+  form->addRow(tr("Spacing"), spacingRow);
+
   brushVbox->addLayout(form);
   vbox->addWidget(brushGroup_);
   vbox->addStretch(1);
@@ -597,6 +630,21 @@ void ToolsPanel::refreshFromBrush() {
   opacityLabel_->setText(QStringLiteral("%1%").arg(oPct));
   flowSlider_->setValue(fPct);
   flowLabel_->setText(QStringLiteral("%1%").arg(fPct));
+  const int sjPct = static_cast<int>(std::lround(p.sizeJitter * 100.f));
+  const int ojPct = static_cast<int>(std::lround(p.opacityJitter * 100.f));
+  const int spPct = static_cast<int>(std::lround(p.spacingRatio * 100.f));
+  if (sizeJitterSlider_) {
+    sizeJitterSlider_->setValue(sjPct);
+    sizeJitterLabel_->setText(QStringLiteral("%1%").arg(sjPct));
+  }
+  if (opacityJitterSlider_) {
+    opacityJitterSlider_->setValue(ojPct);
+    opacityJitterLabel_->setText(QStringLiteral("%1%").arg(ojPct));
+  }
+  if (spacingSlider_) {
+    spacingSlider_->setValue(std::clamp(spPct, 1, 100));
+    spacingLabel_->setText(QStringLiteral("%1%").arg(spPct));
+  }
   suppressEdits_ = false;
 }
 
@@ -657,6 +705,25 @@ void ToolsPanel::onFlowChanged(int v) {
   if (suppressEdits_ || !brush_) return;
   flowLabel_->setText(QStringLiteral("%1%").arg(v));
   brush_->brush().setFlow(v / 100.f);
+}
+
+void ToolsPanel::onSizeJitterChanged(int v) {
+  if (suppressEdits_ || !brush_) return;
+  if (sizeJitterLabel_) sizeJitterLabel_->setText(QStringLiteral("%1%").arg(v));
+  brush_->brush().setSizeJitter(v / 100.f);
+}
+
+void ToolsPanel::onOpacityJitterChanged(int v) {
+  if (suppressEdits_ || !brush_) return;
+  if (opacityJitterLabel_)
+    opacityJitterLabel_->setText(QStringLiteral("%1%").arg(v));
+  brush_->brush().setOpacityJitter(v / 100.f);
+}
+
+void ToolsPanel::onSpacingChanged(int v) {
+  if (suppressEdits_ || !brush_) return;
+  if (spacingLabel_) spacingLabel_->setText(QStringLiteral("%1%").arg(v));
+  brush_->brush().setSpacingRatio(v / 100.f);
 }
 
 void ToolsPanel::applyFgToBrush() {

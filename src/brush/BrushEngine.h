@@ -1,5 +1,9 @@
 #pragma once
 
+#include <cstdint>
+#include <random>
+#include <vector>
+
 #include "brush/RoundBrush.h"
 #include "core/TuxImage.h"
 
@@ -43,6 +47,15 @@ class BrushEngine {
     return r;
   }
 
+  // Force the *next* beginStroke to derive its RNG from this id instead of
+  // the internal monotonic counter. Consumed on next beginStroke; after
+  // that, the engine reverts to counter-based seeding. Exists so tests can
+  // pin a specific jitter pattern without constructing a fresh engine.
+  void setNextStrokeSeedForTesting(std::uint64_t id) noexcept {
+    pinnedSeed_ = id;
+    havePinnedSeed_ = true;
+  }
+
  private:
   void growBounds(int x0, int y0, int x1, int y1);
 
@@ -55,6 +68,12 @@ class BrushEngine {
   float distAccum_ = 0.f;
   Rect bounds_{};
   Rect incremental_{};
+
+  std::uint64_t strokeIdCounter_ = 0;
+  std::uint64_t pinnedSeed_ = 0;
+  bool havePinnedSeed_ = false;
+  std::mt19937 rng_;
+  std::vector<float> stampKernel_;
 };
 
 }  // namespace tuxels
