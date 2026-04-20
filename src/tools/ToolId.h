@@ -10,6 +10,8 @@ enum class ToolId {
   Crop,
   Move,
   Transform,
+  Lasso,
+  PolyLasso,
 };
 
 }  // namespace tuxels

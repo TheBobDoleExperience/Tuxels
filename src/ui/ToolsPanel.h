@@ -17,7 +17,9 @@ namespace tuxels {
 
 class BrushTool;
 class BucketTool;
+class LassoTool;
 class MagicWandTool;
+class PolyLassoTool;
 
 // Left-side dock: tool picker (Brush / Marquee / …) plus the active tool's
 // parameter controls. Brush: fg/bg swatches + size/hardness/opacity/flow.
@@ -48,6 +50,12 @@ class ToolsPanel : public QDockWidget {
   // on press.
   void setMagicWandTool(MagicWandTool* tool);
 
+  // Attach the live lasso tools. Both share the same options row — one
+  // persistent combine mode that applies to whichever lasso is active.
+  // The panel pushes mode changes into both tools so swapping between
+  // Lasso and Polygonal Lasso doesn't silently flip the mode.
+  void setLassoTools(LassoTool* lasso, PolyLassoTool* polyLasso);
+
   // Reflect the currently-active tool in the picker UI (without emitting
   // toolPicked). Called after MainWindow switches tools via a keyboard
   // shortcut so the button state stays in sync.
@@ -60,6 +68,9 @@ class ToolsPanel : public QDockWidget {
 
   // Reflect the magic wand's persistent combine mode in its options row.
   void setWandMode(SelectionMode m);
+
+  // Reflect the shared lasso combine mode in the lasso options row.
+  void setLassoMode(SelectionMode m);
 
  signals:
   // Fired when the user clicks a picker button. MainWindow wires this to
@@ -75,6 +86,10 @@ class ToolsPanel : public QDockWidget {
   // Same idea for the magic wand — Subtract/Intersect stay reachable
   // without Alt.
   void wandModeChanged(SelectionMode m);
+
+  // Shared across Lasso and Polygonal Lasso — MainWindow pushes the
+  // chosen mode into both tools.
+  void lassoModeChanged(SelectionMode m);
 
  public slots:
   void swapColors();
@@ -107,10 +122,13 @@ class ToolsPanel : public QDockWidget {
   QToolButton* pickCropBtn_ = nullptr;
   QToolButton* pickMoveBtn_ = nullptr;
   QToolButton* pickTransformBtn_ = nullptr;
+  QToolButton* pickLassoBtn_ = nullptr;
+  QToolButton* pickPolyLassoBtn_ = nullptr;
   QWidget* brushGroup_ = nullptr;
   QWidget* marqueeGroup_ = nullptr;
   QWidget* bucketGroup_ = nullptr;
   QWidget* wandGroup_ = nullptr;
+  QWidget* lassoGroup_ = nullptr;
   QToolButton* marqueeReplaceBtn_ = nullptr;
   QToolButton* marqueeAddBtn_ = nullptr;
   QToolButton* marqueeSubtractBtn_ = nullptr;
@@ -119,6 +137,10 @@ class ToolsPanel : public QDockWidget {
   QToolButton* wandAddBtn_ = nullptr;
   QToolButton* wandSubtractBtn_ = nullptr;
   QToolButton* wandIntersectBtn_ = nullptr;
+  QToolButton* lassoReplaceBtn_ = nullptr;
+  QToolButton* lassoAddBtn_ = nullptr;
+  QToolButton* lassoSubtractBtn_ = nullptr;
+  QToolButton* lassoIntersectBtn_ = nullptr;
 
   BucketTool* bucket_ = nullptr;
   QSlider* bucketToleranceSlider_ = nullptr;
@@ -129,6 +151,9 @@ class ToolsPanel : public QDockWidget {
   MagicWandTool* wand_ = nullptr;
   QSlider* wandToleranceSlider_ = nullptr;
   QLabel* wandToleranceLabel_ = nullptr;
+
+  LassoTool* lasso_ = nullptr;
+  PolyLassoTool* polyLasso_ = nullptr;
 
   QFrame* fgSwatch_ = nullptr;
   QFrame* bgSwatch_ = nullptr;

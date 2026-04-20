@@ -1,12 +1,22 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 
 #include "core/TuxImage.h"
 
 namespace tuxels {
 
 enum class SelectionMode { Replace, Add, Subtract, Intersect };
+
+// Doc-space 2D point. Introduced for polygon rasterization; used by the
+// lasso tools' live path and by `SelectionMask::fillPolygon`. Kept Qt-free
+// so tuxels_core stays GUI-independent; CanvasView converts QPointF ↔
+// Point2f at the boundary.
+struct Point2f {
+  float x = 0.f;
+  float y = 0.f;
+};
 
 // A document-sized grayscale mask that tools consult when writing pixels.
 // Intensity lives in the underlying TuxImage's R channel (0 = not selected,
@@ -36,6 +46,14 @@ class SelectionMask {
 
   // Fill the intersection of `r` with the document with `value ∈ [0, 1]`.
   void fillRect(Rect r, float value = 1.f);
+
+  // Even-odd scanline polygon fill. `points` is a closed polygon (last →
+  // first edge is implicit). Handles self-intersecting paths (even-odd
+  // parity means inner loops cut holes), degenerate horizontal edges are
+  // skipped, and fewer than 3 points is a no-op. Coordinates are sampled
+  // at pixel centers (x+0.5, y+0.5) so integer-coord polygons produce
+  // predictable axis-aligned rects.
+  void fillPolygon(const std::vector<Point2f>& points, float value = 1.f);
 
   // In-place combine `other` onto self per the given mode:
   //   Replace   → out = b

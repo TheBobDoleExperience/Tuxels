@@ -8,6 +8,7 @@
 #include <QWidget>
 #include <vector>
 
+#include "core/SelectionMask.h"
 #include "core/TuxImage.h"
 #include "tools/ToolId.h"
 
@@ -74,6 +75,10 @@ class CanvasView : public QWidget {
   void ensureCacheImage(Rect pixelRect);
   QPointF canvasToWidget(QPointF p) const;
   QRect widgetRectForPixels(Rect pixelRect) const;
+  // Widget-space bounding rect enclosing `path` (doc pixel coords), padded
+  // by a couple widget-space pixels so the pen stroke doesn't leave
+  // artefacts on partial updates. Empty when the path has <2 points.
+  QRect widgetRectForPath(const std::vector<Point2f>& path) const;
   // Widget-space bounding rect for the cursor ring centered at widget pos
   // `p`, sized to the active tool's radius. Empty if no radius is reported.
   QRect brushCursorWidgetRect(QPointF p) const;

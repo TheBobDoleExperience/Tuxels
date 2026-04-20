@@ -1,6 +1,7 @@
 #include "core/SelectionMask.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "core/Tile.h"
 
@@ -49,6 +50,88 @@ void SelectionMask::fillRect(Rect r, float value) {
                          }
                        }
                      });
+}
+
+void SelectionMask::fillPolygon(const std::vector<Point2f>& points,
+                                float value) {
+  if (points.size() < 3) return;
+  value = std::clamp(value, 0.f, 1.f);
+  const Rgba32F px{value, 0.f, 0.f, 1.f};
+
+  // Build the edge table. For each non-horizontal polygon edge we store
+  // (yMin, yMax, x at yMin, dx/dy) and always orient yMin < yMax so the
+  // scanline loop doesn't care about vertex winding order. Horizontal
+  // edges contribute nothing to even-odd parity so we skip them outright.
+  struct Edge {
+    float yMin;
+    float yMax;
+    float xAtYMin;
+    float invSlope;
+  };
+  std::vector<Edge> edges;
+  edges.reserve(points.size());
+  float yMinAll = points[0].y;
+  float yMaxAll = points[0].y;
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    const Point2f& a = points[i];
+    const Point2f& b = points[(i + 1) % points.size()];
+    yMinAll = std::min(yMinAll, a.y);
+    yMaxAll = std::max(yMaxAll, a.y);
+    if (a.y == b.y) continue;  // horizontal, skipped
+    float x0 = a.x, y0 = a.y, x1 = b.x, y1 = b.y;
+    if (y0 > y1) { std::swap(x0, x1); std::swap(y0, y1); }
+    edges.push_back({y0, y1, x0, (x1 - x0) / (y1 - y0)});
+  }
+  if (edges.empty()) return;
+
+  const int docW = image_.width();
+  const int docH = image_.height();
+  const int yStart = std::max(0, static_cast<int>(std::floor(yMinAll)));
+  const int yEnd =
+      std::min(docH, static_cast<int>(std::ceil(yMaxAll)));
+  if (yEnd <= yStart) return;
+
+  std::vector<float> xs;
+  for (int y = yStart; y < yEnd; ++y) {
+    // Sample at pixel center. Edges are half-open in y: active for
+    // `scanY ∈ [yMin, yMax)`, so vertices where two edges meet are each
+    // counted exactly once — the edge whose yMin == scanY is in; the one
+    // ending at yMax == scanY is out. This avoids double-count spikes
+    // at shared vertices.
+    const float scanY = y + 0.5f;
+    xs.clear();
+    for (const Edge& e : edges) {
+      if (scanY >= e.yMin && scanY < e.yMax) {
+        xs.push_back(e.xAtYMin + (scanY - e.yMin) * e.invSlope);
+      }
+    }
+    if (xs.size() < 2) continue;
+    std::sort(xs.begin(), xs.end());
+
+    // Walk crossings in pairs (even-odd). For span (xa, xb), a pixel `i`
+    // is inside iff its center `i + 0.5` satisfies xa < i + 0.5 < xb
+    // (strict on both ends). That gives xStart = floor(xa + 0.5) and
+    // xEnd = ceil(xb - 0.5). The asymmetric-looking formulas both reduce
+    // to the expected integer span for integer-coord polygons, and
+    // correctly exclude a pixel whose center lands exactly on an edge
+    // (e.g. the 45° hypotenuse of a right triangle at half-integer x).
+    // Clamping to the doc happens at tile-fill time.
+    for (std::size_t k = 0; k + 1 < xs.size(); k += 2) {
+      const int xa =
+          std::max(0, static_cast<int>(std::floor(xs[k] + 0.5f)));
+      const int xb =
+          std::min(docW, static_cast<int>(std::ceil(xs[k + 1] - 0.5f)));
+      if (xb <= xa) continue;
+      forEachTileSubrect(image_, xa, y, xb, y + 1,
+                         [&](Tile& t, int lx0, int ly0, int lx1, int ly1) {
+                           for (int yy = ly0; yy < ly1; ++yy) {
+                             for (int xx = lx0; xx < lx1; ++xx) {
+                               t.at(xx, yy) = px;
+                             }
+                           }
+                         });
+    }
+  }
 }
 
 void SelectionMask::combine(const SelectionMask& other, SelectionMode mode) {

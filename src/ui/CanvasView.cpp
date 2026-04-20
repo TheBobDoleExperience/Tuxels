@@ -184,6 +184,11 @@ QCursor CanvasView::cursorForTool(ToolId id) {
       // points, and the cursor shape changes would need to be region-aware
       // (which we can add later with hover-test in the paint path).
       return QCursor(Qt::ArrowCursor);
+    case ToolId::Lasso:
+    case ToolId::PolyLasso:
+      // Crosshair matches the marquee idiom and keeps vertex placement
+      // precise at any zoom.
+      return QCursor(Qt::CrossCursor);
   }
   return QCursor(Qt::ArrowCursor);
 }
@@ -435,6 +440,27 @@ QRect CanvasView::widgetRectForPixels(Rect pixelRect) const {
   return QRect(x0, y0, x1 - x0, y1 - y0);
 }
 
+QRect CanvasView::widgetRectForPath(const std::vector<Point2f>& path) const {
+  if (path.size() < 2) return QRect();
+  float minX = path[0].x, maxX = path[0].x;
+  float minY = path[0].y, maxY = path[0].y;
+  for (const auto& p : path) {
+    minX = std::min(minX, p.x);
+    maxX = std::max(maxX, p.x);
+    minY = std::min(minY, p.y);
+    maxY = std::max(maxY, p.y);
+  }
+  QPointF tl = canvasToWidget(QPointF(minX, minY));
+  QPointF br = canvasToWidget(QPointF(maxX, maxY));
+  // Pad by 2 widget pixels for the dashed pen stroke; same trick
+  // `widgetRectForPixels` uses for the rubber-band rectangle.
+  const int x0 = static_cast<int>(std::floor(tl.x())) - 2;
+  const int y0 = static_cast<int>(std::floor(tl.y())) - 2;
+  const int x1 = static_cast<int>(std::ceil(br.x())) + 2;
+  const int y1 = static_cast<int>(std::ceil(br.y())) + 2;
+  return QRect(x0, y0, x1 - x0, y1 - y0);
+}
+
 void CanvasView::paintEvent(QPaintEvent*) {
   QPainter painter(this);
   painter.fillRect(rect(), QColor(40, 40, 40));
@@ -545,6 +571,31 @@ void CanvasView::paintEvent(QPaintEvent*) {
     }
   }
 
+  // Live lasso / polygonal-lasso polyline. Drawn as an open polyline
+  // (close segment is implicit on commit) with the same black-underlay +
+  // white-dashed-overlay treatment as the marching ants so the in-progress
+  // outline stays legible over any image content.
+  if (tool_) {
+    if (auto path = tool_->livePath()) {
+      if (path->size() >= 2) {
+        painter.setRenderHint(QPainter::Antialiasing, false);
+        QPolygonF poly;
+        poly.reserve(static_cast<int>(path->size()));
+        for (const auto& p : *path) {
+          poly.append(canvasToWidget(QPointF(p.x, p.y)));
+        }
+        painter.setBrush(Qt::NoBrush);
+        QPen black(QColor(0, 0, 0, 220), 1.0);
+        painter.setPen(black);
+        painter.drawPolyline(poly);
+        QPen white(QColor(255, 255, 255, 240), 1.0);
+        white.setStyle(Qt::DashLine);
+        painter.setPen(white);
+        painter.drawPolyline(poly);
+      }
+    }
+  }
+
   // Brush cursor ring. Drawn as concentric black+white 1-px strokes so the
   // outline stays legible against any painted color.
   if (cursorInCanvas_ && tool_) {
@@ -624,6 +675,7 @@ void CanvasView::mousePressEvent(QMouseEvent* e) {
   if (tool_ && doc_ && e->button() == Qt::LeftButton) {
     tool_->setModifiers(translateModifiers(e->modifiers()));
     const QPointF ip = (QPointF(e->pos()) - pan_) / zoom_;
+    std::optional<std::vector<Point2f>> prePath = tool_->livePath();
     tool_->press(*doc_, static_cast<float>(ip.x()),
                  static_cast<float>(ip.y()), MouseButton::Left);
     painting_ = true;
@@ -637,6 +689,11 @@ void CanvasView::mousePressEvent(QMouseEvent* e) {
     // Also invalidate the rubber-band rect region if the tool now has a
     // live rect (press may set a 1-px rect that needs drawing).
     if (auto r = tool_->liveRect()) update(widgetRectForPixels(*r));
+    // Poly-lasso close-on-press may have torn down the in-progress path;
+    // repaint wherever the old path lived. Symmetrically repaint the new
+    // path region in case the press extended the polyline.
+    if (prePath) update(widgetRectForPath(*prePath));
+    if (auto p = tool_->livePath()) update(widgetRectForPath(*p));
     e->accept();
     return;
   }
@@ -656,9 +713,10 @@ void CanvasView::mouseMoveEvent(QMouseEvent* e) {
   cursorInCanvas_ = true;
   moveBrushCursorTo(QPointF(e->pos()));
   if (painting_ && tool_ && doc_) {
-    // Capture the rubber-band rect BEFORE the move so we can invalidate
-    // its old widget-space extent; then compute a new one after.
+    // Capture the rubber-band rect AND polyline BEFORE the move so we can
+    // invalidate their old widget-space extents; then compute new ones.
     std::optional<Rect> preRect = tool_->liveRect();
+    std::optional<std::vector<Point2f>> prePath = tool_->livePath();
 
     const QPointF ip = (QPointF(e->pos()) - pan_) / zoom_;
     tool_->move(*doc_, static_cast<float>(ip.x()),
@@ -668,8 +726,22 @@ void CanvasView::mouseMoveEvent(QMouseEvent* e) {
 
     if (preRect) update(widgetRectForPixels(*preRect));
     if (auto r = tool_->liveRect()) update(widgetRectForPixels(*r));
+    if (prePath) update(widgetRectForPath(*prePath));
+    if (auto p = tool_->livePath()) update(widgetRectForPath(*p));
     e->accept();
     return;
+  }
+  // Not in a drag — still forward to hover() so the polygonal lasso can
+  // track the cursor for its rubber-band last edge. Repaint the old and
+  // new polyline bboxes so the trailing line follows the mouse without a
+  // full-canvas invalidate.
+  if (tool_ && doc_) {
+    std::optional<std::vector<Point2f>> prePath = tool_->livePath();
+    const QPointF ip = (QPointF(e->pos()) - pan_) / zoom_;
+    tool_->hover(*doc_, static_cast<float>(ip.x()),
+                 static_cast<float>(ip.y()));
+    if (prePath) update(widgetRectForPath(*prePath));
+    if (auto p = tool_->livePath()) update(widgetRectForPath(*p));
   }
   QWidget::mouseMoveEvent(e);
 }
@@ -702,6 +774,7 @@ void CanvasView::mouseReleaseEvent(QMouseEvent* e) {
   moveBrushCursorTo(QPointF(e->pos()));
   if (painting_ && tool_ && doc_ && e->button() == Qt::LeftButton) {
     std::optional<Rect> preRect = tool_->liveRect();
+    std::optional<std::vector<Point2f>> prePath = tool_->livePath();
 
     const QPointF ip = (QPointF(e->pos()) - pan_) / zoom_;
     tool_->release(*doc_, static_cast<float>(ip.x()),
@@ -709,8 +782,9 @@ void CanvasView::mouseReleaseEvent(QMouseEvent* e) {
     painting_ = false;
     const Rect dirty = tool_->takeDirtyRect();
     if (!dirty.isEmpty()) requestRecomposite(dirty);
-    // Wipe any lingering rubber-band.
+    // Wipe any lingering rubber-band / live polyline.
     if (preRect) update(widgetRectForPixels(*preRect));
+    if (prePath) update(widgetRectForPath(*prePath));
     emit layerPainted();
     e->accept();
     return;

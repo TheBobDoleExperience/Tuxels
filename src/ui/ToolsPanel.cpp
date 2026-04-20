@@ -18,7 +18,9 @@
 #include "brush/RoundBrush.h"
 #include "tools/BrushTool.h"
 #include "tools/BucketTool.h"
+#include "tools/LassoTool.h"
 #include "tools/MagicWandTool.h"
+#include "tools/PolyLassoTool.h"
 
 namespace tuxels {
 
@@ -94,6 +96,23 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
   connect(pickMarqueeBtn_, &QToolButton::clicked, this,
           [this]() { emit toolPicked(ToolId::Marquee); });
 
+  pickLassoBtn_ = new QToolButton(pickerRow);
+  pickLassoBtn_->setText("L");
+  pickLassoBtn_->setToolTip(tr("Lasso — freehand selection  (L)"));
+  pickLassoBtn_->setCheckable(true);
+  pickerGroup->addButton(pickLassoBtn_);
+  connect(pickLassoBtn_, &QToolButton::clicked, this,
+          [this]() { emit toolPicked(ToolId::Lasso); });
+
+  pickPolyLassoBtn_ = new QToolButton(pickerRow);
+  pickPolyLassoBtn_->setText("P");
+  pickPolyLassoBtn_->setToolTip(
+      tr("Polygonal Lasso — click vertices, Enter to close"));
+  pickPolyLassoBtn_->setCheckable(true);
+  pickerGroup->addButton(pickPolyLassoBtn_);
+  connect(pickPolyLassoBtn_, &QToolButton::clicked, this,
+          [this]() { emit toolPicked(ToolId::PolyLasso); });
+
   pickBucketBtn_ = new QToolButton(pickerRow);
   pickBucketBtn_->setText("G");
   pickBucketBtn_->setToolTip(tr("Paint Bucket  (G)"));
@@ -136,6 +155,8 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
 
   pickerLayout->addWidget(pickBrushBtn_);
   pickerLayout->addWidget(pickMarqueeBtn_);
+  pickerLayout->addWidget(pickLassoBtn_);
+  pickerLayout->addWidget(pickPolyLassoBtn_);
   pickerLayout->addWidget(pickBucketBtn_);
   pickerLayout->addWidget(pickWandBtn_);
   pickerLayout->addWidget(pickCropBtn_);
@@ -189,6 +210,52 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
   marqueeVbox->addWidget(modeRow);
   marqueeGroup_->setVisible(false);
   vbox->addWidget(marqueeGroup_);
+
+  // -- Lasso options (visible when Lasso OR Polygonal Lasso is active) ----
+  // Shared combine-mode row — same four buttons as Marquee. The mode is
+  // pushed into both lasso tools so swapping between Lasso and Polygonal
+  // Lasso preserves the user's chosen combine behavior.
+  lassoGroup_ = new QWidget(root);
+  auto* lassoVbox = new QVBoxLayout(lassoGroup_);
+  lassoVbox->setContentsMargins(0, 0, 0, 0);
+  lassoVbox->setSpacing(4);
+  auto* lassoHeader = new QLabel(tr("<b>Lasso</b>"), lassoGroup_);
+  lassoVbox->addWidget(lassoHeader);
+  auto* lassoModeRow = new QWidget(lassoGroup_);
+  auto* lassoModeLayout = new QHBoxLayout(lassoModeRow);
+  lassoModeLayout->setContentsMargins(0, 0, 0, 0);
+  lassoModeLayout->setSpacing(4);
+  auto* lassoModeGroup = new QButtonGroup(this);
+  lassoModeGroup->setExclusive(true);
+  auto makeLassoModeBtn = [&](const QString& text, const QString& tip,
+                               SelectionMode m, bool checked) {
+    auto* b = new QToolButton(lassoModeRow);
+    b->setText(text);
+    b->setToolTip(tip);
+    b->setCheckable(true);
+    b->setChecked(checked);
+    lassoModeGroup->addButton(b);
+    lassoModeLayout->addWidget(b);
+    connect(b, &QToolButton::clicked, this,
+            [this, m]() { emit lassoModeChanged(m); });
+    return b;
+  };
+  lassoReplaceBtn_ =
+      makeLassoModeBtn("New", tr("Replace selection  (no modifier)"),
+                       SelectionMode::Replace, true);
+  lassoAddBtn_ =
+      makeLassoModeBtn("+", tr("Add to selection  (Shift)"),
+                       SelectionMode::Add, false);
+  lassoSubtractBtn_ =
+      makeLassoModeBtn("−", tr("Subtract from selection  (Alt)"),
+                       SelectionMode::Subtract, false);
+  lassoIntersectBtn_ =
+      makeLassoModeBtn("∩", tr("Intersect with selection  (Shift+Alt)"),
+                       SelectionMode::Intersect, false);
+  lassoModeLayout->addStretch(1);
+  lassoVbox->addWidget(lassoModeRow);
+  lassoGroup_->setVisible(false);
+  vbox->addWidget(lassoGroup_);
 
   // -- Bucket options (visible only when Bucket is active) ----------------
   bucketGroup_ = new QWidget(root);
@@ -416,10 +483,15 @@ void ToolsPanel::setActiveTool(ToolId id) {
   if (pickCropBtn_) pickCropBtn_->setChecked(id == ToolId::Crop);
   if (pickMoveBtn_) pickMoveBtn_->setChecked(id == ToolId::Move);
   if (pickTransformBtn_) pickTransformBtn_->setChecked(id == ToolId::Transform);
+  if (pickLassoBtn_) pickLassoBtn_->setChecked(id == ToolId::Lasso);
+  if (pickPolyLassoBtn_)
+    pickPolyLassoBtn_->setChecked(id == ToolId::PolyLasso);
   if (brushGroup_) brushGroup_->setVisible(id == ToolId::Brush);
   if (marqueeGroup_) marqueeGroup_->setVisible(id == ToolId::Marquee);
   if (bucketGroup_) bucketGroup_->setVisible(id == ToolId::Bucket);
   if (wandGroup_) wandGroup_->setVisible(id == ToolId::MagicWand);
+  if (lassoGroup_)
+    lassoGroup_->setVisible(id == ToolId::Lasso || id == ToolId::PolyLasso);
 }
 
 void ToolsPanel::setMarqueeMode(SelectionMode m) {
@@ -435,6 +507,13 @@ void ToolsPanel::setWandMode(SelectionMode m) {
   if (wandAddBtn_)       wandAddBtn_->setChecked(m == SelectionMode::Add);
   if (wandSubtractBtn_)  wandSubtractBtn_->setChecked(m == SelectionMode::Subtract);
   if (wandIntersectBtn_) wandIntersectBtn_->setChecked(m == SelectionMode::Intersect);
+}
+
+void ToolsPanel::setLassoMode(SelectionMode m) {
+  if (lassoReplaceBtn_)   lassoReplaceBtn_->setChecked(m == SelectionMode::Replace);
+  if (lassoAddBtn_)       lassoAddBtn_->setChecked(m == SelectionMode::Add);
+  if (lassoSubtractBtn_)  lassoSubtractBtn_->setChecked(m == SelectionMode::Subtract);
+  if (lassoIntersectBtn_) lassoIntersectBtn_->setChecked(m == SelectionMode::Intersect);
 }
 
 void ToolsPanel::setBrushTool(BrushTool* tool) {
@@ -463,6 +542,15 @@ void ToolsPanel::setMagicWandTool(MagicWandTool* tool) {
   if (!wand_) return;
   onWandToleranceChanged(wandToleranceSlider_ ? wandToleranceSlider_->value()
                                               : 0);
+}
+
+void ToolsPanel::setLassoTools(LassoTool* lasso, PolyLassoTool* polyLasso) {
+  lasso_ = lasso;
+  polyLasso_ = polyLasso;
+  // No tolerance/opacity sliders yet — the only control is the shared
+  // combine-mode row, which is already wired via the lassoModeChanged
+  // signal. MainWindow seeds the options row from the tool's initial
+  // mode in buildDocks.
 }
 
 void ToolsPanel::refreshFromBrush() {

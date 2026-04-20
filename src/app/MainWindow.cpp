@@ -28,9 +28,11 @@
 #include "tools/BrushTool.h"
 #include "tools/BucketTool.h"
 #include "tools/CropTool.h"
+#include "tools/LassoTool.h"
 #include "tools/MagicWandTool.h"
 #include "tools/MarqueeTool.h"
 #include "tools/MoveTool.h"
+#include "tools/PolyLassoTool.h"
 #include "tools/TransformTool.h"
 #include "ui/CanvasView.h"
 #include "ui/LayersPanel.h"
@@ -49,6 +51,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   cropTool_ = std::make_unique<CropTool>();
   moveTool_ = std::make_unique<MoveTool>();
   transformTool_ = std::make_unique<TransformTool>();
+  lassoTool_ = std::make_unique<LassoTool>();
+  polyLassoTool_ = std::make_unique<PolyLassoTool>();
   undoStack_ = std::make_unique<UndoStack>(/*maxDepth=*/64);
 
   canvas_ = new CanvasView(this);
@@ -204,6 +208,12 @@ void MainWindow::buildMenus() {
           [this]() { setActiveTool(ToolId::Move); });
   addAction(pickMove);
 
+  auto* pickLasso = new QAction(this);
+  pickLasso->setShortcut(QKeySequence(tr("L")));
+  connect(pickLasso, &QAction::triggered, this,
+          [this]() { setActiveTool(ToolId::Lasso); });
+  addAction(pickLasso);
+
   // Enter / Escape — transform accept / cancel. Guarded inside the handler
   // so they're no-ops unless the TransformTool is active; normal typing is
   // unaffected because QInputDialogs/modals steal the key before this
@@ -228,6 +238,7 @@ void MainWindow::buildDocks() {
   toolsPanel_->setBrushTool(brushTool_.get());
   toolsPanel_->setBucketTool(bucketTool_.get());
   toolsPanel_->setMagicWandTool(wandTool_.get());
+  toolsPanel_->setLassoTools(lassoTool_.get(), polyLassoTool_.get());
   toolsPanel_->setActiveTool(activeToolId_);
   connect(toolsPanel_, &ToolsPanel::toolPicked, this,
           &MainWindow::onToolPicked);
@@ -239,8 +250,16 @@ void MainWindow::buildDocks() {
           [this](SelectionMode m) {
             if (wandTool_) wandTool_->setMode(m);
           });
+  connect(toolsPanel_, &ToolsPanel::lassoModeChanged, this,
+          [this](SelectionMode m) {
+            // Both lasso tools share the persistent mode so swapping
+            // between Lasso and Polygonal Lasso doesn't flip it.
+            if (lassoTool_) lassoTool_->setMode(m);
+            if (polyLassoTool_) polyLassoTool_->setMode(m);
+          });
   if (marqueeTool_) toolsPanel_->setMarqueeMode(marqueeTool_->mode());
   if (wandTool_) toolsPanel_->setWandMode(wandTool_->mode());
+  if (lassoTool_) toolsPanel_->setLassoMode(lassoTool_->mode());
 
   layersPanel_ = new LayersPanel(this);
   addDockWidget(Qt::RightDockWidgetArea, layersPanel_);
@@ -662,6 +681,29 @@ void MainWindow::onLayerPainted() {
       if (canvas_) canvas_->refreshSelectionOverlay();
     }
   }
+  // Lasso (freehand) commit — same plumbing; release closes the polygon
+  // and hands us a before/after pair.
+  if (lassoTool_) {
+    if (auto commit = lassoTool_->takeCommit()) {
+      doc_->setSelection(commit->after ? commit->after->clone() : nullptr);
+      undoStack_->push(std::make_unique<SelectionCommand>(
+          doc_.get(), std::move(commit->before), std::move(commit->after),
+          commit->label));
+      if (canvas_) canvas_->refreshSelectionOverlay();
+    }
+  }
+  // Polygonal lasso commit — normally driven by Enter/Escape or click-on-
+  // start-vertex, not by release; this path picks up the click-on-start
+  // case (press builds the commit before layerPainted fires on release).
+  if (polyLassoTool_) {
+    if (auto commit = polyLassoTool_->takeCommit()) {
+      doc_->setSelection(commit->after ? commit->after->clone() : nullptr);
+      undoStack_->push(std::make_unique<SelectionCommand>(
+          doc_.get(), std::move(commit->before), std::move(commit->after),
+          commit->label));
+      if (canvas_) canvas_->refreshSelectionOverlay();
+    }
+  }
   // Crop commit. The CropCommand constructor snapshots the document, then
   // applies the crop in place; we only have to push it onto the stack and
   // refresh the UI. Dimensions change, so do a full recompose + rebuild the
@@ -705,6 +747,16 @@ void MainWindow::setActiveTool(ToolId id) {
   if (activeToolId_ == ToolId::Transform && id != ToolId::Transform) {
     commitTransformIfActive();
   }
+  // Leaving the Polygonal Lasso with a half-drawn polygon: discard it.
+  // An Enter press just before tool-switch would have committed already;
+  // this path handles the "user clicked another tool button mid-draw"
+  // case. A silent discard is the lesser surprise vs. committing an
+  // unclosed shape.
+  if (activeToolId_ == ToolId::PolyLasso && id != ToolId::PolyLasso &&
+      polyLassoTool_ && polyLassoTool_->isBuilding()) {
+    polyLassoTool_->cancel();
+    if (canvas_) canvas_->update();
+  }
   activeToolId_ = id;
   switch (id) {
     case ToolId::Brush:
@@ -727,6 +779,12 @@ void MainWindow::setActiveTool(ToolId id) {
       break;
     case ToolId::Transform:
       if (canvas_) canvas_->setTool(transformTool_.get());
+      break;
+    case ToolId::Lasso:
+      if (canvas_) canvas_->setTool(lassoTool_.get());
+      break;
+    case ToolId::PolyLasso:
+      if (canvas_) canvas_->setTool(polyLassoTool_.get());
       break;
   }
   if (canvas_) canvas_->setToolCursor(CanvasView::cursorForTool(id));
@@ -982,6 +1040,17 @@ bool MainWindow::commitTransformIfActive() {
 }
 
 void MainWindow::onTransformAccept() {
+  // Enter key is shared between Transform commit and Polygonal Lasso
+  // close — neither steals it from QInputDialogs because those capture
+  // the key before this window-scope QAction sees it. Route by tool
+  // state: Transform has priority (it's modal), then Polygonal Lasso.
+  if (polyLassoTool_ && polyLassoTool_->isBuilding() && doc_ &&
+      (!transformTool_ || !transformTool_->isActive())) {
+    polyLassoTool_->finish(*doc_);
+    onLayerPainted();
+    if (canvas_) canvas_->update();
+    return;
+  }
   if (!transformTool_ || !transformTool_->isActive()) return;
   const bool pushed = commitTransformIfActive();
   // Drop out of the modal tool regardless — even an identity Enter should
@@ -1000,6 +1069,16 @@ void MainWindow::onTransformAccept() {
 }
 
 void MainWindow::onTransformCancel() {
+  // Escape shares the same key-routing logic as Enter: Transform first,
+  // then Polygonal Lasso. A Lasso cancel discards the in-progress
+  // polygon without touching the document selection.
+  if (polyLassoTool_ && polyLassoTool_->isBuilding() &&
+      (!transformTool_ || !transformTool_->isActive())) {
+    polyLassoTool_->cancel();
+    if (canvas_) canvas_->update();
+    statusBar()->showMessage(tr("Polygonal lasso cancelled"), 1500);
+    return;
+  }
   if (!transformTool_ || !transformTool_->isActive()) return;
   transformTool_->cancel();
   if (activeToolId_ == ToolId::Transform) {

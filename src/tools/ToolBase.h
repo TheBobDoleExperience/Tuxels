@@ -1,7 +1,9 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
+#include "core/SelectionMask.h"  // Point2f for livePath()
 #include "core/TuxImage.h"
 
 namespace tuxels {
@@ -49,6 +51,22 @@ class ToolBase {
   // drag. nullopt when no drag is active or the tool doesn't have one.
   // Rendered by CanvasView as a dashed outline on every mouse event.
   virtual std::optional<Rect> liveRect() const { return std::nullopt; }
+
+  // Live in-progress polyline in document pixel coordinates, used by the
+  // lasso family so the canvas can render the not-yet-committed selection
+  // outline. nullopt when the tool has no path to show. CanvasView paints
+  // consecutive points as an open polyline (black underlay + white dashed
+  // overlay) and invalidates the path's bbox on each mouse event so the
+  // line follows the cursor without a full repaint.
+  virtual std::optional<std::vector<Point2f>> livePath() const {
+    return std::nullopt;
+  }
+
+  // Called on every canvas mouse-move, even when no button is held. The
+  // polygonal lasso uses this to update the "rubber-band" last-edge that
+  // trails the cursor between clicks. Default: no-op. Tools that only act
+  // during drags (brush, marquee, move, transform) can ignore this.
+  virtual void hover(Document& /*doc*/, float /*x*/, float /*y*/) {}
 
   // Called by CanvasView before each press/move/release so the tool can
   // branch on current modifier state (e.g. marquee Add/Subtract/Intersect).
