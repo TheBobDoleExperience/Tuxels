@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <climits>
 #include <functional>
 #include <unordered_map>
 
@@ -127,6 +128,50 @@ class TuxImage {
   TileStore tiles_;
   bool recording_ = false;
   TileSnapshot before_;
+};
+
+// Read-only pixel cursor that caches the current tile pointer. Replaces
+// per-pixel `TuxImage::getPixel` in inner loops where a single hash lookup
+// per pixel dominates cost — we instead take one lookup per tile boundary
+// crossed (every 256 pixels along a scanline). Non-negative coordinate
+// precondition: use only for in-document reads. Absent tiles sample as
+// fully transparent, matching `TuxImage::getPixel`.
+class TileRowCursor {
+ public:
+  explicit TileRowCursor(const TuxImage& img)
+      : tiles_(&img.tiles()), w_(img.width()), h_(img.height()) {}
+
+  Rgba32F at(int x, int y) noexcept {
+    if (x < 0 || y < 0 || x >= w_ || y >= h_) return Rgba32F::transparent();
+    const int tx = x / kTilePx;
+    const int ty = y / kTilePx;
+    if (tx != curTx_ || ty != curTy_) {
+      curTx_ = tx;
+      curTy_ = ty;
+      tile_ = tiles_->find({tx, ty});
+    }
+    if (!tile_) return Rgba32F::transparent();
+    return tile_->at(x - tx * kTilePx, y - ty * kTilePx);
+  }
+
+  float sampleR(int x, int y) noexcept {
+    if (x < 0 || y < 0 || x >= w_ || y >= h_) return 0.f;
+    const int tx = x / kTilePx;
+    const int ty = y / kTilePx;
+    if (tx != curTx_ || ty != curTy_) {
+      curTx_ = tx;
+      curTy_ = ty;
+      tile_ = tiles_->find({tx, ty});
+    }
+    if (!tile_) return 0.f;
+    return tile_->at(x - tx * kTilePx, y - ty * kTilePx).r;
+  }
+
+ private:
+  const TileStore* tiles_;
+  int w_, h_;
+  int curTx_ = INT_MIN, curTy_ = INT_MIN;
+  const Tile* tile_ = nullptr;
 };
 
 }  // namespace tuxels

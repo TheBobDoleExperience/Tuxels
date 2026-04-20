@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QCursor>
 #include <QImage>
 #include <QLineF>
 #include <QPoint>
@@ -8,6 +9,7 @@
 #include <vector>
 
 #include "core/TuxImage.h"
+#include "tools/ToolId.h"
 
 class QTimer;
 
@@ -25,6 +27,13 @@ class CanvasView : public QWidget {
 
   void setDocument(Document* doc);
   void setTool(ToolBase* tool) noexcept { tool_ = tool; }
+  // Set the cursor shown while hovering the canvas with the active tool.
+  // Stored so we can re-apply after a transient pan grab ends.
+  void setToolCursor(const QCursor& c);
+  // Build a Photoshop-style cursor for the given tool id (bucket, wand,
+  // crop get custom pixmaps; marquee uses a crosshair; brush falls back to
+  // the arrow since the ring overlay already shows the hot spot).
+  static QCursor cursorForTool(ToolId id);
   void requestRecomposite();
   // Partial variant: union `pixelRect` into the pending dirty region so the
   // next paint recomposites only affected tiles. Empty rect is a no-op.
@@ -95,6 +104,7 @@ class CanvasView : public QWidget {
 
   QPointF cursorWidgetPos_{-1.0, -1.0};
   bool cursorInCanvas_ = false;
+  QCursor toolCursor_{Qt::ArrowCursor};
 
   // Marching-ants overlay.
   std::vector<QLineF> selectionSegments_;  // doc pixel coords

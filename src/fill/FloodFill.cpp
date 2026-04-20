@@ -29,8 +29,14 @@ FloodFillResult floodFill(TuxImage& target, int seedX, int seedY,
   if (W <= 0 || H <= 0) return result;
   if (seedX < 0 || seedY < 0 || seedX >= W || seedY >= H) return result;
 
-  auto inSelection = [selection](int x, int y) {
-    return selection == nullptr || selection->sample(x, y) > 0.f;
+  // Per-scanline cached readers so the inner match / blend loops pay one
+  // hash lookup per tile boundary instead of per pixel.
+  TileRowCursor targetCursor(target);
+  auto selCursorPtr = selection
+                           ? std::make_unique<TileRowCursor>(selection->image())
+                           : nullptr;
+  auto inSelection = [&](int x, int y) {
+    return selCursorPtr == nullptr || selCursorPtr->sampleR(x, y) > 0.f;
   };
   if (!inSelection(seedX, seedY)) return result;
 
@@ -39,7 +45,7 @@ FloodFillResult floodFill(TuxImage& target, int seedX, int seedY,
   // We snapshot pixel-by-pixel via a visited bitmap rather than cloning the
   // whole image: each pixel is either not-yet-visited (still-original) or
   // visited (already written, never re-checked).
-  const Rgba32F seedColor = target.getPixel(seedX, seedY);
+  const Rgba32F seedColor = targetCursor.at(seedX, seedY);
   const float tol = std::max(0.f, opts.tolerance);
 
   std::vector<uint8_t> visited(static_cast<size_t>(W) * H, 0);
@@ -51,7 +57,7 @@ FloodFillResult floodFill(TuxImage& target, int seedX, int seedY,
     if (x < 0 || y < 0 || x >= W || y >= H) return false;
     if (seen(x, y)) return false;
     if (!inSelection(x, y)) return false;
-    const Rgba32F c = target.getPixel(x, y);
+    const Rgba32F c = targetCursor.at(x, y);
     return channelDist(c, seedColor) <= tol;
   };
 
@@ -79,10 +85,10 @@ FloodFillResult floodFill(TuxImage& target, int seedX, int seedY,
     // rows so a neighbor doesn't push cells we're about to cover.
     for (int x = xL; x <= xR; ++x) {
       seen(x, c.y) = 1;
-      const float sel = selection ? selection->sample(x, c.y) : 1.f;
+      const float sel = selCursorPtr ? selCursorPtr->sampleR(x, c.y) : 1.f;
       const float a = opts.opacity * fillColor.a * sel;
       if (a <= 0.f) continue;
-      const Rgba32F dst = target.getPixel(x, c.y);
+      const Rgba32F dst = targetCursor.at(x, c.y);
       const float inv = 1.f - a;
       Rgba32F out;
       out.r = a * fillColor.r + inv * dst.r;
@@ -133,12 +139,15 @@ std::unique_ptr<SelectionMask> floodSelect(const TuxImage& source,
   if (W <= 0 || H <= 0) return nullptr;
   if (seedX < 0 || seedY < 0 || seedX >= W || seedY >= H) return nullptr;
 
-  auto inClip = [clip](int x, int y) {
-    return clip == nullptr || clip->sample(x, y) > 0.f;
+  TileRowCursor srcCursor(source);
+  auto clipCursorPtr =
+      clip ? std::make_unique<TileRowCursor>(clip->image()) : nullptr;
+  auto inClip = [&](int x, int y) {
+    return clipCursorPtr == nullptr || clipCursorPtr->sampleR(x, y) > 0.f;
   };
   if (!inClip(seedX, seedY)) return nullptr;
 
-  const Rgba32F seedColor = source.getPixel(seedX, seedY);
+  const Rgba32F seedColor = srcCursor.at(seedX, seedY);
   const float tol = std::max(0.f, tolerance);
 
   std::vector<uint8_t> visited(static_cast<size_t>(W) * H, 0);
@@ -149,7 +158,7 @@ std::unique_ptr<SelectionMask> floodSelect(const TuxImage& source,
     if (x < 0 || y < 0 || x >= W || y >= H) return false;
     if (seen(x, y)) return false;
     if (!inClip(x, y)) return false;
-    const Rgba32F c = source.getPixel(x, y);
+    const Rgba32F c = srcCursor.at(x, y);
     return channelDist(c, seedColor) <= tol;
   };
 

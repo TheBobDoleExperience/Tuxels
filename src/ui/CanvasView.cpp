@@ -4,7 +4,10 @@
 #include <QEnterEvent>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPen>
+#include <QPixmap>
+#include <QPolygonF>
 #include <QTimer>
 #include <QWheelEvent>
 #include <algorithm>
@@ -30,6 +33,157 @@ CanvasView::CanvasView(QWidget* parent) : QWidget(parent) {
     QRect r = selectionWidgetRect();
     if (!r.isEmpty()) update(r);
   });
+}
+
+namespace {
+
+// Shared pixmap scaffolding. 32×32 logical, 2× device pixel ratio so the
+// art stays crisp on hi-DPI. Black stroke + white outline keeps the cursor
+// legible over both light and dark image content (same trick the brush
+// ring uses). Hotspot is in logical coords.
+QPixmap makeCursorPixmap(std::function<void(QPainter&)> draw) {
+  constexpr int S = 32;
+  QPixmap pm(S * 2, S * 2);
+  pm.setDevicePixelRatio(2.0);
+  pm.fill(Qt::transparent);
+  QPainter p(&pm);
+  p.setRenderHint(QPainter::Antialiasing, true);
+  draw(p);
+  return pm;
+}
+
+QCursor makeBucketCursor() {
+  QPixmap pm = makeCursorPixmap([](QPainter& p) {
+    // Body: angled trapezoidal bucket. Points at the drop spot in the
+    // lower-left so the hotspot sits where the paint comes out.
+    QPolygonF body({
+        QPointF(8.0, 6.0),   // rim-left
+        QPointF(24.0, 10.0), // rim-right
+        QPointF(21.0, 24.0), // base-right
+        QPointF(11.0, 22.0), // base-left
+    });
+    p.setPen(QPen(Qt::white, 3.0, Qt::SolidLine, Qt::RoundCap,
+                  Qt::RoundJoin));
+    p.setBrush(Qt::NoBrush);
+    p.drawPolygon(body);
+    p.setPen(QPen(Qt::black, 1.5, Qt::SolidLine, Qt::RoundCap,
+                  Qt::RoundJoin));
+    p.setBrush(QColor(240, 240, 240));
+    p.drawPolygon(body);
+    // Rim ellipse so it reads as a bucket opening.
+    p.setBrush(QColor(210, 210, 210));
+    p.drawEllipse(QPointF(16.0, 8.0), 8.0, 2.0);
+    // Handle arcing above the rim.
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(Qt::black, 1.2));
+    QPainterPath handle;
+    handle.moveTo(9.0, 7.0);
+    handle.quadTo(16.0, -1.0, 23.0, 9.0);
+    p.drawPath(handle);
+    // Paint drop at hotspot (4, 28) — angled tear.
+    QPainterPath drop;
+    drop.moveTo(4.0, 28.0);
+    drop.quadTo(1.0, 24.0, 6.0, 22.0);
+    drop.quadTo(9.0, 24.0, 4.0, 28.0);
+    p.setPen(QPen(Qt::white, 2.5));
+    p.drawPath(drop);
+    p.setPen(QPen(Qt::black, 1.0));
+    p.setBrush(QColor(50, 120, 220));
+    p.drawPath(drop);
+  });
+  return QCursor(pm, 4, 28);
+}
+
+QCursor makeWandCursor() {
+  QPixmap pm = makeCursorPixmap([](QPainter& p) {
+    // Wand shaft running from lower-left to upper-right. Star burst at
+    // the tip; tip pixel is the hotspot so the wand "picks" exactly where
+    // the user clicks.
+    QPointF tail(4.0, 28.0);
+    QPointF tip(22.0, 10.0);
+    // Shaft white underlay then black.
+    p.setPen(QPen(Qt::white, 4.0, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(tail, tip);
+    p.setPen(QPen(Qt::black, 2.0, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(tail, tip);
+    // Tip diamond: four-point star rotated 45°.
+    QPolygonF star({
+        QPointF(22.0, 4.0),
+        QPointF(25.0, 10.0),
+        QPointF(22.0, 16.0),
+        QPointF(19.0, 10.0),
+    });
+    p.setPen(QPen(Qt::white, 2.0));
+    p.setBrush(Qt::NoBrush);
+    p.drawPolygon(star);
+    p.setPen(QPen(Qt::black, 1.0));
+    p.setBrush(QColor(255, 230, 120));
+    p.drawPolygon(star);
+    // Two short sparkle rays orthogonal to the shaft.
+    p.setPen(QPen(Qt::white, 2.0, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(QPointF(26.0, 6.0), QPointF(28.0, 4.0));
+    p.drawLine(QPointF(18.0, 14.0), QPointF(16.0, 16.0));
+    p.setPen(QPen(Qt::black, 1.0, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(QPointF(26.0, 6.0), QPointF(28.0, 4.0));
+    p.drawLine(QPointF(18.0, 14.0), QPointF(16.0, 16.0));
+  });
+  return QCursor(pm, 22, 10);
+}
+
+QCursor makeCropCursor() {
+  QPixmap pm = makeCursorPixmap([](QPainter& p) {
+    // Two L-brackets at opposing corners make the classic crop cursor.
+    // Hotspot is the center (16, 16) — matches Photoshop, where clicks
+    // anchor the crop-box corner to the cursor point.
+    auto drawL = [&](QPointF origin, QPointF armA, QPointF armB,
+                     qreal width) {
+      p.setPen(QPen(Qt::white, width + 2.0, Qt::SolidLine, Qt::SquareCap));
+      p.drawLine(origin, armA);
+      p.drawLine(origin, armB);
+      p.setPen(QPen(Qt::black, width, Qt::SolidLine, Qt::SquareCap));
+      p.drawLine(origin, armA);
+      p.drawLine(origin, armB);
+    };
+    // Upper-left bracket.
+    drawL(QPointF(6.0, 6.0), QPointF(14.0, 6.0), QPointF(6.0, 14.0), 2.0);
+    // Lower-right bracket.
+    drawL(QPointF(26.0, 26.0), QPointF(18.0, 26.0),
+          QPointF(26.0, 18.0), 2.0);
+    // Center crosshair so the hotspot is visually obvious.
+    p.setPen(QPen(Qt::white, 3.0, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(QPointF(16.0, 13.0), QPointF(16.0, 19.0));
+    p.drawLine(QPointF(13.0, 16.0), QPointF(19.0, 16.0));
+    p.setPen(QPen(Qt::black, 1.2, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(QPointF(16.0, 13.0), QPointF(16.0, 19.0));
+    p.drawLine(QPointF(13.0, 16.0), QPointF(19.0, 16.0));
+  });
+  return QCursor(pm, 16, 16);
+}
+
+}  // namespace
+
+QCursor CanvasView::cursorForTool(ToolId id) {
+  switch (id) {
+    case ToolId::Brush:
+      // The ring overlay already communicates position + radius; a plain
+      // arrow keeps the image readable under the ring.
+      return QCursor(Qt::ArrowCursor);
+    case ToolId::Marquee:
+      return QCursor(Qt::CrossCursor);
+    case ToolId::Bucket:
+      return makeBucketCursor();
+    case ToolId::MagicWand:
+      return makeWandCursor();
+    case ToolId::Crop:
+      return makeCropCursor();
+  }
+  return QCursor(Qt::ArrowCursor);
+}
+
+void CanvasView::setToolCursor(const QCursor& c) {
+  toolCursor_ = c;
+  // Don't stomp the closed-hand cursor mid-pan; restored on pan release.
+  if (!panning_) setCursor(toolCursor_);
 }
 
 int CanvasView::translateModifiers(int qt) {
@@ -89,28 +243,25 @@ void CanvasView::rebuildSelectionSegments() {
   const int y0 = b.y;
   const int x1 = b.right();
   const int y1 = b.bottom();
-  auto selected = [sel](int x, int y) {
-    return sel->sample(x, y) > 0.5f;
-  };
+  // One cursor per row-relative offset we probe (current, up, down). Each
+  // walks sequentially in x so the tile pointer cache stays hot — per-tile
+  // hash lookup instead of per-pixel. Huge win on large wand selections.
+  TileRowCursor cur(sel->image()), up(sel->image()), dn(sel->image());
   selectionSegments_.reserve(256);
   for (int y = y0; y < y1; ++y) {
     for (int x = x0; x < x1; ++x) {
-      if (!selected(x, y)) continue;
-      // Edge to the left neighbor.
-      if (!selected(x - 1, y)) {
+      if (cur.sampleR(x, y) <= 0.5f) continue;
+      if (cur.sampleR(x - 1, y) <= 0.5f) {
         selectionSegments_.emplace_back(QPointF(x, y), QPointF(x, y + 1));
       }
-      // Edge to the right neighbor.
-      if (!selected(x + 1, y)) {
+      if (cur.sampleR(x + 1, y) <= 0.5f) {
         selectionSegments_.emplace_back(QPointF(x + 1, y),
                                         QPointF(x + 1, y + 1));
       }
-      // Edge to the top neighbor.
-      if (!selected(x, y - 1)) {
+      if (up.sampleR(x, y - 1) <= 0.5f) {
         selectionSegments_.emplace_back(QPointF(x, y), QPointF(x + 1, y));
       }
-      // Edge to the bottom neighbor.
-      if (!selected(x, y + 1)) {
+      if (dn.sampleR(x, y + 1) <= 0.5f) {
         selectionSegments_.emplace_back(QPointF(x, y + 1),
                                         QPointF(x + 1, y + 1));
       }
@@ -203,10 +354,13 @@ void CanvasView::ensureCacheImage(Rect pixelRect) {
     v = std::clamp(v, 0.f, 1.f);
     return static_cast<uchar>(std::lround(v * 255.f));
   };
+  // Scanline-cached read: one hash lookup per tile boundary rather than
+  // per pixel. Makes large post-fill / post-crop re-uploads snappy.
+  TileRowCursor cursor(composite_);
   for (int y = y0; y < y1; ++y) {
     auto* row = reinterpret_cast<uchar*>(cache_.scanLine(y));
     for (int x = x0; x < x1; ++x) {
-      Rgba32F p = composite_.getPixel(x, y);
+      Rgba32F p = cursor.at(x, y);
       row[x * 4 + 0] = clamp255(p.r);
       row[x * 4 + 1] = clamp255(p.g);
       row[x * 4 + 2] = clamp255(p.b);
@@ -489,7 +643,9 @@ void CanvasView::mouseReleaseEvent(QMouseEvent* e) {
   if (panning_ &&
       (e->button() == Qt::MiddleButton || e->button() == Qt::LeftButton)) {
     panning_ = false;
-    unsetCursor();
+    // Restore the active tool's cursor rather than unsetCursor(), which
+    // would leave a plain arrow until the next setToolCursor call.
+    setCursor(toolCursor_);
     e->accept();
     return;
   }

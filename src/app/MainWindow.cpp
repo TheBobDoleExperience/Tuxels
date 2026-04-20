@@ -47,6 +47,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   canvas_ = new CanvasView(this);
   canvas_->setTool(brushTool_.get());
+  canvas_->setToolCursor(CanvasView::cursorForTool(ToolId::Brush));
   connect(canvas_, &CanvasView::layerPainted, this, &MainWindow::onLayerPainted);
   setCentralWidget(canvas_);
 
@@ -592,6 +593,7 @@ void MainWindow::setActiveTool(ToolId id) {
       if (canvas_) canvas_->setTool(cropTool_.get());
       break;
   }
+  if (canvas_) canvas_->setToolCursor(CanvasView::cursorForTool(id));
   if (toolsPanel_) toolsPanel_->setActiveTool(id);
   if (canvas_) canvas_->refreshBrushCursor();
 }
