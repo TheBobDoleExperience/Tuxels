@@ -66,6 +66,11 @@ class Document {
 
   LayerId nextLayerId() noexcept { return ++nextId_; }
 
+  // Seed the internal id counter so the next call to `nextLayerId()` returns
+  // `v + 1`. Used by `loadTxl` so ids assigned to layers created after load
+  // don't collide with ids stored in the file.
+  void setLayerIdCounter(LayerId v) noexcept { nextId_ = v; }
+
   // Convenience: create a blank pixel layer of the current canvas size,
   // append to the top of the tree, set it active.
   PixelLayer* addBlankPixelLayer(const std::string& name) {

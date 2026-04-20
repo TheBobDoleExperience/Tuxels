@@ -20,6 +20,7 @@
 #include "history/SelectionCommand.h"
 #include "history/UndoStack.h"
 #include "io/PngIO.h"
+#include "io/TxlIO.h"
 #include "layers/LayerMask.h"
 #include "layers/PixelLayer.h"
 #include "tools/BrushTool.h"
@@ -70,6 +71,10 @@ void MainWindow::buildMenus() {
   auto* openAct = fileMenu->addAction(tr("&Open…"));
   openAct->setShortcut(QKeySequence::Open);
   connect(openAct, &QAction::triggered, this, &MainWindow::onFileOpen);
+
+  auto* saveAsAct = fileMenu->addAction(tr("&Save As…"));
+  saveAsAct->setShortcut(QKeySequence::SaveAs);
+  connect(saveAsAct, &QAction::triggered, this, &MainWindow::onFileSaveAs);
 
   fileMenu->addSeparator();
   auto* exportAct = fileMenu->addAction(tr("Export &As PNG…"));
@@ -296,8 +301,27 @@ void MainWindow::onFileNew() {
 
 void MainWindow::onFileOpen() {
   const QString path = QFileDialog::getOpenFileName(
-      this, tr("Open Image"), QString(), tr("PNG Images (*.png)"));
+      this, tr("Open"), QString(),
+      tr("Tuxels or PNG (*.txl *.png);;Tuxels Document (*.txl);;PNG Images (*.png)"));
   if (path.isEmpty()) return;
+
+  const QString suffix = QFileInfo(path).suffix().toLower();
+  if (suffix == "txl") {
+    std::string err;
+    auto loaded = loadTxl(path.toStdString(), &err);
+    if (!loaded) {
+      QMessageBox::warning(this, tr("Open Failed"),
+                           tr("Could not open %1:\n%2")
+                               .arg(path, QString::fromStdString(err)));
+      return;
+    }
+    setDocument(std::move(*loaded));
+    layersPanel_->refresh();
+    canvas_->requestRecomposite();
+    canvas_->refreshSelectionOverlay();
+    statusBar()->showMessage(tr("Opened %1").arg(path), 3000);
+    return;
+  }
 
   QString err;
   auto img = loadPng(path, &err);
@@ -314,6 +338,26 @@ void MainWindow::onFileOpen() {
   layersPanel_->refresh();
   canvas_->requestRecomposite();
   statusBar()->showMessage(tr("Opened %1").arg(path), 3000);
+}
+
+void MainWindow::onFileSaveAs() {
+  if (!doc_ || doc_->width() <= 0 || doc_->height() <= 0) {
+    QMessageBox::warning(this, tr("Save"), tr("No document to save."));
+    return;
+  }
+  QString path = QFileDialog::getSaveFileName(
+      this, tr("Save As"), QString(), tr("Tuxels Document (*.txl)"));
+  if (path.isEmpty()) return;
+  if (!path.endsWith(".txl", Qt::CaseInsensitive)) path += ".txl";
+
+  std::string err;
+  if (!saveTxl(path.toStdString(), *doc_, &err)) {
+    QMessageBox::warning(this, tr("Save Failed"),
+                         tr("Could not write %1:\n%2")
+                             .arg(path, QString::fromStdString(err)));
+    return;
+  }
+  statusBar()->showMessage(tr("Saved %1").arg(path), 3000);
 }
 
 void MainWindow::onFileExport() {

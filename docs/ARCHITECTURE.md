@@ -198,6 +198,18 @@ Exclusion:    C = Cs + Cd - 2*Cs*Cd
 - UI wiring: ToolsPanel picker grew a Crop (C) button; MainWindow holds `std::unique_ptr<CropTool>`, routes the C shortcut, and on commit calls `canvas_->requestRecomposite()` + `refreshSelectionOverlay()` (dimensions changed, so partial recompose doesn't work — `CanvasView::recomposite` detects the mismatch and rebuilds `composite_`).
 - Deferred: Photoshop-style interactive crop with persistent rect + adjustable handles + Enter-to-commit / Escape-to-cancel. Current behavior is drag-to-commit; Ctrl+Z recovers. Good enough for this milestone.
 
+### `.txl` native format v1 (M1-S6)
+
+- `io/TxlIO.{h,cpp}` — pure C++ (no Qt) so it lives in `tuxels_core` and tests link without pulling Qt. Chose a custom chunked binary container over ZIP: no external dependency, no platform packaging differences, and nothing about this v1 benefits from the deflate-per-file layout ZIP gives you. Trade-off accepted: the file is not inspectable with `unzip`.
+- **Layout** (documented in `TxlIO.h`): 8-byte magic `"TUXELS\x01\x00"`, `Version u32 = 1`, `Flags u32 = 0`, `DocWidth/Height u32`, `ActiveLayer i32`, `PaintTarget u8`, `HasSelection u8`, `Reserved u16`, `NumLayers u32`. Each layer emits `{id u64, kind u8 (1=PixelLayer), visible u8, maskEnabled u8, hasMask u8, opacity f32, blend u32, nameLen u32 + utf-8 name, numImageTiles u32 + [TileRecord], numMaskTiles u32 + [TileRecord]}`. A `TileRecord` is `{tx i32, ty i32, Rgba32F[kTilePixels]}` — one uncompressed 1 MiB payload per tile. Selection chunk at the tail mirrors one image.
+- **No compression in v1.** `Flags` is reserved for a future zstd bit; readers hard-fail on unknown flag bits so a v2 writer can't silently hand v1 readers something they can't decode.
+- **Tile-sparse on disk.** We only emit tiles that exist in the `TileStore`, so a 4096×4096 canvas with a couple of strokes writes ~2 MiB, not 256 MiB. This matches how the in-memory `TuxImage` already works.
+- **Endianness.** Host-order writes of primitive types via `reinterpret_cast` + `ofstream::write`. Tuxels only targets little-endian (Linux x86_64) for M1; porting to BE is a v2 task that can flip a `Flags` bit and byteswap. Floats go out in IEEE-754 host order for the same reason.
+- **Mask semantics.** When `hasMask == false`, writers still emit `numMaskTiles u32 = 0` so the layer record has a uniform shape. Readers verify the zero to catch writer/reader drift early.
+- **Layer-id counter.** `Document` gained a `setLayerIdCounter(LayerId)` setter; `loadTxl` seeds it with `max(loaded id)` so a subsequent `addBlankPixelLayer` call on a loaded document cannot collide with an id already in the tree.
+- **Kind enum.** Only `1 = PixelLayer` is valid in v1. Future kinds (adjustment, text, group, smart object) get their own ordinals and readers branch on kind; older readers error cleanly on unknown kinds.
+- **UI wiring.** `File → Open…` dispatches on extension (`.txl` → `loadTxl`, `.png` → `loadPng`); `File → Save As…` (Ctrl+Shift+S) writes `.txl` unconditionally (adds the extension if the user omits it). PNG export stays on its own menu entry — Save As is the native-format path, Export As PNG is the lossy-flatten path.
+
 ---
 
 ## Deviations from SCOPE.md (intentional, M0-only)
