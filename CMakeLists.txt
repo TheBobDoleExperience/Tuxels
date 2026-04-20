@@ -27,6 +27,7 @@ set(TUXELS_CORE_SOURCES
   src/brush/RoundBrush.cpp
   src/brush/BrushEngine.cpp
   src/tools/BrushTool.cpp
+  src/tools/MarqueeTool.cpp
 )
 
 add_library(tuxels_core STATIC ${TUXELS_CORE_SOURCES})

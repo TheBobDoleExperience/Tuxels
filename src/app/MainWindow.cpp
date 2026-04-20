@@ -22,6 +22,7 @@
 #include "layers/LayerMask.h"
 #include "layers/PixelLayer.h"
 #include "tools/BrushTool.h"
+#include "tools/MarqueeTool.h"
 #include "ui/CanvasView.h"
 #include "ui/LayersPanel.h"
 #include "ui/ToolsPanel.h"
@@ -33,6 +34,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   resize(1400, 900);
 
   brushTool_ = std::make_unique<BrushTool>();
+  marqueeTool_ = std::make_unique<MarqueeTool>();
   undoStack_ = std::make_unique<UndoStack>(/*maxDepth=*/64);
 
   canvas_ = new CanvasView(this);
@@ -135,12 +137,28 @@ void MainWindow::buildMenus() {
   connect(reset, &QAction::triggered, this,
           [this]() { if (toolsPanel_) toolsPanel_->resetColors(); });
   addAction(reset);
+
+  // Tool-picker keyboard shortcuts (Photoshop letters).
+  auto* pickBrush = new QAction(this);
+  pickBrush->setShortcut(QKeySequence(tr("B")));
+  connect(pickBrush, &QAction::triggered, this,
+          [this]() { setActiveTool(ToolId::Brush); });
+  addAction(pickBrush);
+
+  auto* pickMarquee = new QAction(this);
+  pickMarquee->setShortcut(QKeySequence(tr("M")));
+  connect(pickMarquee, &QAction::triggered, this,
+          [this]() { setActiveTool(ToolId::Marquee); });
+  addAction(pickMarquee);
 }
 
 void MainWindow::buildDocks() {
   toolsPanel_ = new ToolsPanel(this);
   addDockWidget(Qt::LeftDockWidgetArea, toolsPanel_);
   toolsPanel_->setBrushTool(brushTool_.get());
+  toolsPanel_->setActiveTool(activeToolId_);
+  connect(toolsPanel_, &ToolsPanel::toolPicked, this,
+          &MainWindow::onToolPicked);
 
   layersPanel_ = new LayersPanel(this);
   addDockWidget(Qt::RightDockWidgetArea, layersPanel_);
@@ -189,6 +207,10 @@ void MainWindow::refreshAfterUndoRedo(Rect dirtyRect) {
   } else {
     canvas_->requestRecomposite(dirtyRect);
   }
+  // Selection pointer may have been swapped by an undone/redone
+  // SelectionCommand — paintEvent's identity check will rebuild the cache,
+  // but kicking it here keeps the overlay in lock-step with the recomposite.
+  if (canvas_) canvas_->refreshSelectionOverlay();
 }
 
 void MainWindow::populateSampleDocument() {
@@ -407,16 +429,47 @@ void MainWindow::onActiveLayerChanged() {
 }
 
 void MainWindow::onLayerPainted() {
-  if (!brushTool_ || !doc_) return;
-  auto info = brushTool_->takeLastStroke();
-  if (info.layer && info.target) {
-    auto cmd = std::make_unique<PaintCommand>(
-        info.target, std::move(info.recorded.before),
-        std::move(info.recorded.after), "Paint Stroke");
-    undoStack_->push(std::move(cmd));
+  if (!doc_) return;
+  // Brush stroke commit (only populated when the brush was the active tool
+  // for the just-released gesture).
+  if (brushTool_) {
+    auto info = brushTool_->takeLastStroke();
+    if (info.layer && info.target) {
+      auto cmd = std::make_unique<PaintCommand>(
+          info.target, std::move(info.recorded.before),
+          std::move(info.recorded.after), "Paint Stroke");
+      undoStack_->push(std::move(cmd));
+    }
+  }
+  // Marquee commit. Push a SelectionCommand and refresh the ants overlay.
+  if (marqueeTool_) {
+    if (auto commit = marqueeTool_->takeCommit()) {
+      doc_->setSelection(commit->after ? commit->after->clone() : nullptr);
+      undoStack_->push(std::make_unique<SelectionCommand>(
+          doc_.get(), std::move(commit->before), std::move(commit->after),
+          commit->label));
+      if (canvas_) canvas_->refreshSelectionOverlay();
+    }
   }
   if (layersPanel_) layersPanel_->refresh();
 }
+
+void MainWindow::setActiveTool(ToolId id) {
+  if (id == activeToolId_) return;
+  activeToolId_ = id;
+  switch (id) {
+    case ToolId::Brush:
+      if (canvas_) canvas_->setTool(brushTool_.get());
+      break;
+    case ToolId::Marquee:
+      if (canvas_) canvas_->setTool(marqueeTool_.get());
+      break;
+  }
+  if (toolsPanel_) toolsPanel_->setActiveTool(id);
+  if (canvas_) canvas_->refreshBrushCursor();
+}
+
+void MainWindow::onToolPicked(ToolId id) { setActiveTool(id); }
 
 void MainWindow::onEditUndo() {
   if (!undoStack_) return;
@@ -608,6 +661,7 @@ void MainWindow::onSelectAll() {
   auto after = doc_->selection()->clone();
   undoStack_->push(std::make_unique<SelectionCommand>(
       doc_.get(), std::move(before), std::move(after), "Select All"));
+  if (canvas_) canvas_->refreshSelectionOverlay();
   statusBar()->showMessage(tr("Selection: all"), 1500);
 }
 
@@ -617,6 +671,7 @@ void MainWindow::onDeselect() {
   doc_->setSelection(nullptr);
   undoStack_->push(std::make_unique<SelectionCommand>(
       doc_.get(), std::move(before), nullptr, "Deselect"));
+  if (canvas_) canvas_->refreshSelectionOverlay();
   statusBar()->showMessage(tr("Deselected"), 1500);
 }
 
@@ -630,6 +685,7 @@ void MainWindow::onSelectInverse() {
   auto after = doc_->selection()->clone();
   undoStack_->push(std::make_unique<SelectionCommand>(
       doc_.get(), std::move(before), std::move(after), "Inverse Selection"));
+  if (canvas_) canvas_->refreshSelectionOverlay();
   statusBar()->showMessage(tr("Selection inverted"), 1500);
 }
 

@@ -3,21 +3,24 @@
 #include <QColor>
 #include <QDockWidget>
 
+#include "tools/ToolId.h"
+
 class QFrame;
 class QLabel;
 class QSlider;
 class QSpinBox;
 class QToolButton;
+class QWidget;
 
 namespace tuxels {
 
 class BrushTool;
 
-// Left-side dock: foreground/background color swatches (click → QColorDialog,
-// X swaps, D resets to black/white) and sliders for the active brush's
-// size / hardness / opacity / flow. Pushes straight into the live BrushTool
-// — no intermediate model, the sliders ARE the source of truth for the
-// brush params until the tool system grows a richer settings store.
+// Left-side dock: tool picker (Brush / Marquee / …) plus the active tool's
+// parameter controls. Brush: fg/bg swatches + size/hardness/opacity/flow.
+// Non-paint tools hide the brush panel. Pushes straight into the live
+// BrushTool — no intermediate model, the sliders ARE the source of truth
+// for brush params until the tool system grows a richer settings store.
 class ToolsPanel : public QDockWidget {
   Q_OBJECT
 
@@ -31,6 +34,16 @@ class ToolsPanel : public QDockWidget {
   // behind the panel's back) and update all widgets without triggering
   // edit signals.
   void refreshFromBrush();
+
+  // Reflect the currently-active tool in the picker UI (without emitting
+  // toolPicked). Called after MainWindow switches tools via a keyboard
+  // shortcut so the button state stays in sync.
+  void setActiveTool(ToolId id);
+
+ signals:
+  // Fired when the user clicks a picker button. MainWindow wires this to
+  // actually swap the active tool on CanvasView.
+  void toolPicked(ToolId id);
 
  public slots:
   void swapColors();
@@ -52,6 +65,10 @@ class ToolsPanel : public QDockWidget {
   QColor fg_ = Qt::black;
   QColor bg_ = Qt::white;
   bool suppressEdits_ = false;
+
+  QToolButton* pickBrushBtn_ = nullptr;
+  QToolButton* pickMarqueeBtn_ = nullptr;
+  QWidget* brushGroup_ = nullptr;
 
   QFrame* fgSwatch_ = nullptr;
   QFrame* bgSwatch_ = nullptr;

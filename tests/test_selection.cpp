@@ -2,9 +2,11 @@
 
 #include "brush/BrushEngine.h"
 #include "brush/RoundBrush.h"
+#include "core/Document.h"
 #include "core/SelectionMask.h"
 #include "core/TuxImage.h"
 #include "test_harness.h"
+#include "tools/MarqueeTool.h"
 
 namespace tuxels {
 
@@ -184,6 +186,156 @@ TEST(brush_scales_by_partial_selection) {
   const float ah = half.getPixel(5, 5).a;
   CHECK(af > 0.5f);
   CHECK_NEAR(ah, af * 0.5f, 1e-4f);
+}
+
+TEST(selection_mask_is_empty_detects_zero) {
+  SelectionMask m(40, 40);
+  CHECK(m.isEmpty());
+  m.fillRect(Rect{5, 5, 5, 5}, 1.f);
+  CHECK(!m.isEmpty());
+  m.fillRect(Rect{5, 5, 5, 5}, 0.f);
+  CHECK(m.isEmpty());
+}
+
+TEST(selection_mask_bounds_of_selected) {
+  SelectionMask m(100, 100);
+  m.fillRect(Rect{10, 20, 5, 7}, 1.f);
+  Rect b = m.boundsOfSelected();
+  CHECK(b.x == 10);
+  CHECK(b.y == 20);
+  CHECK(b.w == 5);
+  CHECK(b.h == 7);
+  SelectionMask empty(100, 100);
+  CHECK(empty.boundsOfSelected().isEmpty());
+}
+
+TEST(marquee_replace_creates_rect_selection) {
+  Document doc(40, 40);
+  MarqueeTool m;
+  m.setModifiers(Mod::None);
+  m.press(doc, 10.f, 15.f, MouseButton::Left);
+  m.move(doc, 25.f, 30.f);
+  m.release(doc, 25.f, 30.f, MouseButton::Left);
+  auto c = m.takeCommit();
+  CHECK(c.has_value());
+  CHECK(!c->before);
+  CHECK(c->after != nullptr);
+  CHECK_NEAR(c->after->sample(10, 15), 1.f, 1e-5f);
+  CHECK_NEAR(c->after->sample(25, 30), 1.f, 1e-5f);
+  CHECK_NEAR(c->after->sample(9, 15), 0.f, 1e-5f);
+  CHECK_NEAR(c->after->sample(26, 30), 0.f, 1e-5f);
+}
+
+TEST(marquee_add_union_with_existing) {
+  Document doc(40, 40);
+  auto initial = std::make_unique<SelectionMask>(40, 40);
+  initial->fillRect(Rect{0, 0, 20, 20}, 1.f);
+  doc.setSelection(std::move(initial));
+
+  MarqueeTool m;
+  m.setModifiers(Mod::Shift);
+  m.press(doc, 15.f, 15.f, MouseButton::Left);
+  m.move(doc, 30.f, 30.f);
+  m.release(doc, 30.f, 30.f, MouseButton::Left);
+  auto c = m.takeCommit();
+  CHECK(c.has_value());
+  CHECK(c->after != nullptr);
+  // Union covers the old (0..20,0..20) and the new (15..30,15..30).
+  CHECK_NEAR(c->after->sample(5, 5), 1.f, 1e-5f);    // old only
+  CHECK_NEAR(c->after->sample(25, 25), 1.f, 1e-5f);  // new only
+  CHECK_NEAR(c->after->sample(17, 17), 1.f, 1e-5f);  // overlap
+  CHECK_NEAR(c->after->sample(35, 35), 0.f, 1e-5f);  // outside both
+}
+
+TEST(marquee_subtract_carves_hole) {
+  Document doc(40, 40);
+  auto initial = std::make_unique<SelectionMask>(40, 40);
+  initial->fillRect(Rect{0, 0, 40, 40}, 1.f);
+  doc.setSelection(std::move(initial));
+
+  MarqueeTool m;
+  m.setModifiers(Mod::Alt);
+  m.press(doc, 10.f, 10.f, MouseButton::Left);
+  m.move(doc, 19.f, 19.f);
+  m.release(doc, 19.f, 19.f, MouseButton::Left);
+  auto c = m.takeCommit();
+  CHECK(c.has_value());
+  CHECK(c->after != nullptr);
+  CHECK_NEAR(c->after->sample(5, 5), 1.f, 1e-5f);    // still selected
+  CHECK_NEAR(c->after->sample(15, 15), 0.f, 1e-5f);  // carved out
+  CHECK_NEAR(c->after->sample(25, 25), 1.f, 1e-5f);  // still selected
+}
+
+TEST(marquee_intersect_keeps_overlap) {
+  Document doc(40, 40);
+  auto initial = std::make_unique<SelectionMask>(40, 40);
+  initial->fillRect(Rect{0, 0, 20, 40}, 1.f);  // left half
+  doc.setSelection(std::move(initial));
+
+  MarqueeTool m;
+  m.setModifiers(Mod::Shift | Mod::Alt);
+  m.press(doc, 10.f, 0.f, MouseButton::Left);
+  m.move(doc, 29.f, 39.f);  // right-ish rect crossing x=20
+  m.release(doc, 29.f, 39.f, MouseButton::Left);
+  auto c = m.takeCommit();
+  CHECK(c.has_value());
+  CHECK(c->after != nullptr);
+  CHECK_NEAR(c->after->sample(5, 10), 0.f, 1e-5f);    // in a only
+  CHECK_NEAR(c->after->sample(15, 10), 1.f, 1e-5f);   // in both
+  CHECK_NEAR(c->after->sample(25, 10), 0.f, 1e-5f);   // in b only
+}
+
+TEST(marquee_subtract_all_collapses_to_null) {
+  Document doc(20, 20);
+  auto initial = std::make_unique<SelectionMask>(20, 20);
+  initial->fillRect(Rect{0, 0, 20, 20}, 1.f);
+  doc.setSelection(std::move(initial));
+
+  MarqueeTool m;
+  m.setModifiers(Mod::Alt);
+  m.press(doc, 0.f, 0.f, MouseButton::Left);
+  m.move(doc, 19.f, 19.f);
+  m.release(doc, 19.f, 19.f, MouseButton::Left);
+  auto c = m.takeCommit();
+  CHECK(c.has_value());
+  CHECK(c->before != nullptr);
+  CHECK(c->after == nullptr);  // empty mask collapses to no-selection
+}
+
+TEST(marquee_click_without_drag_selects_single_pixel) {
+  // A click-release without movement is still a valid 1-pixel rect drag.
+  // The only way to produce a truly empty drag is to start+end outside the
+  // document; that path is covered separately.
+  Document doc(40, 40);
+  MarqueeTool m;
+  m.setModifiers(Mod::None);
+  m.press(doc, 20.f, 20.f, MouseButton::Left);
+  m.release(doc, 20.f, 20.f, MouseButton::Left);
+  auto c = m.takeCommit();
+  CHECK(c.has_value());
+  CHECK(c->after != nullptr);
+  CHECK_NEAR(c->after->sample(20, 20), 1.f, 1e-5f);
+  CHECK_NEAR(c->after->sample(19, 20), 0.f, 1e-5f);
+  CHECK_NEAR(c->after->sample(21, 20), 0.f, 1e-5f);
+}
+
+TEST(marquee_drag_outside_doc_replace_deselects) {
+  Document doc(40, 40);
+  auto initial = std::make_unique<SelectionMask>(40, 40);
+  initial->fillRect(Rect{5, 5, 10, 10}, 1.f);
+  doc.setSelection(std::move(initial));
+
+  MarqueeTool m;
+  m.setModifiers(Mod::None);
+  // Drag entirely outside the document: clipped rect is empty, and a
+  // Replace with an empty rect should collapse to "no selection".
+  m.press(doc, -10.f, -10.f, MouseButton::Left);
+  m.move(doc, -1.f, -1.f);
+  m.release(doc, -1.f, -1.f, MouseButton::Left);
+  auto c = m.takeCommit();
+  CHECK(c.has_value());
+  CHECK(c->before != nullptr);
+  CHECK(c->after == nullptr);
 }
 
 }  // namespace tuxels

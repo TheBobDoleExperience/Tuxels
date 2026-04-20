@@ -5,6 +5,7 @@
 
 #include "compositor/BlendMode.h"
 #include "core/Document.h"
+#include "tools/ToolId.h"
 
 namespace tuxels {
 
@@ -12,6 +13,7 @@ class BrushTool;
 class CanvasView;
 class LayerBase;
 class LayersPanel;
+class MarqueeTool;
 class ToolsPanel;
 class UndoStack;
 
@@ -48,6 +50,7 @@ class MainWindow : public QMainWindow {
   void onSelectAll();
   void onDeselect();
   void onSelectInverse();
+  void onToolPicked(ToolId id);
 
  private:
   void buildMenus();
@@ -55,13 +58,16 @@ class MainWindow : public QMainWindow {
   void setDocument(std::unique_ptr<Document> doc);
   void populateSampleDocument();
   void refreshAfterUndoRedo(Rect dirtyRect = {});
+  void setActiveTool(ToolId id);
 
   std::unique_ptr<Document> doc_;
   std::unique_ptr<BrushTool> brushTool_;
+  std::unique_ptr<MarqueeTool> marqueeTool_;
   std::unique_ptr<UndoStack> undoStack_;
   CanvasView* canvas_ = nullptr;
   LayersPanel* layersPanel_ = nullptr;
   ToolsPanel* toolsPanel_ = nullptr;
+  ToolId activeToolId_ = ToolId::Brush;
 };
 
 }  // namespace tuxels

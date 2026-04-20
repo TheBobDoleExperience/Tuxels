@@ -1,15 +1,20 @@
 #pragma once
 
 #include <QImage>
+#include <QLineF>
 #include <QPoint>
 #include <QPointF>
 #include <QWidget>
+#include <vector>
 
 #include "core/TuxImage.h"
+
+class QTimer;
 
 namespace tuxels {
 
 class Document;
+class SelectionMask;
 class ToolBase;
 
 class CanvasView : public QWidget {
@@ -27,6 +32,10 @@ class CanvasView : public QWidget {
   // Repaint just the cursor-ring region. Call when the active tool's radius
   // changes (e.g. user adjusted brush size while hovering).
   void refreshBrushCursor();
+  // Recompute the cached marching-ants edge segments from the document's
+  // current selection. Call whenever the selection pointer changes (menu
+  // ops, marquee commits, undo/redo).
+  void refreshSelectionOverlay();
 
   double zoom() const noexcept { return zoom_; }
   void setZoom(double z);
@@ -59,6 +68,15 @@ class CanvasView : public QWidget {
   // regions so the ring visibly follows the mouse.
   void moveBrushCursorTo(QPointF p);
 
+  // Walk the doc's current SelectionMask and extract 4-connected boundary
+  // segments into `selectionSegments_` (stored in doc pixel coords).
+  void rebuildSelectionSegments();
+  // Widget-space rect enclosing the selection outline (including ant pen
+  // width). Empty when no selection. Used for timer-driven partial updates.
+  QRect selectionWidgetRect() const;
+  // Translate a Qt modifier bitmask to our tool-facing one.
+  static int translateModifiers(int qtModifiers);
+
   Document* doc_ = nullptr;
   ToolBase* tool_ = nullptr;
   TuxImage composite_;
@@ -75,11 +93,15 @@ class CanvasView : public QWidget {
   QPoint panStart_;
   QPointF panStartOffset_;
 
-  // Last known cursor position in widget coordinates, and whether the
-  // cursor is currently over the canvas. paintEvent draws the ring only
-  // when inCanvas_ and the active tool returns a radius.
   QPointF cursorWidgetPos_{-1.0, -1.0};
   bool cursorInCanvas_ = false;
+
+  // Marching-ants overlay.
+  std::vector<QLineF> selectionSegments_;  // doc pixel coords
+  Rect selectionBounds_{};                  // doc pixel bbox of selection
+  const SelectionMask* lastSelection_ = nullptr;  // identity for cache
+  QTimer* antsTimer_ = nullptr;
+  int antsPhase_ = 0;
 };
 
 }  // namespace tuxels

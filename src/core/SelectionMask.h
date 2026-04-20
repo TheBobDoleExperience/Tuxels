@@ -48,6 +48,16 @@ class SelectionMask {
   // Flip every pixel inside the document (R → 1 - R).
   void invert();
 
+  // True when every pixel in the document is ≤ epsilon. Callers use this to
+  // decide whether to collapse an all-zero mask back to a null selection
+  // (our canonical "no selection" state).
+  bool isEmpty(float epsilon = 1e-5f) const;
+
+  // Tight doc-pixel-space bounding rect of pixels > threshold. Empty rect
+  // when nothing is selected. Used by the marching-ants overlay to walk
+  // only the interesting area instead of the whole document.
+  Rect boundsOfSelected(float threshold = 0.5f) const;
+
   std::unique_ptr<SelectionMask> clone() const;
 
   static std::unique_ptr<SelectionMask> makeAll(int w, int h);

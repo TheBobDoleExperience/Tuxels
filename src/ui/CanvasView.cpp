@@ -5,12 +5,15 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
+#include <QTimer>
 #include <QWheelEvent>
 #include <algorithm>
 #include <cmath>
 
 #include "compositor/compose.h"
 #include "core/Document.h"
+#include "core/SelectionMask.h"
+#include "tools/MarqueeTool.h"
 #include "tools/ToolBase.h"
 
 namespace tuxels {
@@ -19,6 +22,23 @@ CanvasView::CanvasView(QWidget* parent) : QWidget(parent) {
   setMouseTracking(true);
   setFocusPolicy(Qt::StrongFocus);
   setAttribute(Qt::WA_OpaquePaintEvent, true);
+
+  antsTimer_ = new QTimer(this);
+  antsTimer_->setInterval(100);  // 10 Hz phase tick
+  connect(antsTimer_, &QTimer::timeout, this, [this]() {
+    if (selectionSegments_.empty()) return;
+    antsPhase_ = (antsPhase_ + 1) % 8;
+    QRect r = selectionWidgetRect();
+    if (!r.isEmpty()) update(r);
+  });
+}
+
+int CanvasView::translateModifiers(int qt) {
+  int m = Mod::None;
+  if (qt & Qt::ShiftModifier) m |= Mod::Shift;
+  if (qt & Qt::AltModifier)   m |= Mod::Alt;
+  if (qt & Qt::ControlModifier) m |= Mod::Ctrl;
+  return m;
 }
 
 void CanvasView::setDocument(Document* doc) {
@@ -28,6 +48,10 @@ void CanvasView::setDocument(Document* doc) {
   dirtyRect_ = {};
   pan_ = {0.0, 0.0};
   zoom_ = 1.0;
+  selectionSegments_.clear();
+  selectionBounds_ = {};
+  lastSelection_ = nullptr;
+  antsTimer_->stop();
   update();
 }
 
@@ -35,6 +59,69 @@ void CanvasView::requestRecomposite() {
   dirty_ = true;
   dirtyRect_ = {};  // empty + dirty_=true means "whole image"
   update();
+}
+
+void CanvasView::refreshSelectionOverlay() {
+  rebuildSelectionSegments();
+  if (selectionSegments_.empty()) {
+    antsTimer_->stop();
+  } else if (!antsTimer_->isActive()) {
+    antsTimer_->start();
+  }
+  update();
+}
+
+void CanvasView::rebuildSelectionSegments() {
+  selectionSegments_.clear();
+  selectionBounds_ = {};
+  if (!doc_) {
+    lastSelection_ = nullptr;
+    return;
+  }
+  const SelectionMask* sel = doc_->selection();
+  lastSelection_ = sel;
+  if (!sel) return;
+
+  const Rect b = sel->boundsOfSelected(0.5f);
+  if (b.isEmpty()) return;
+  selectionBounds_ = b;
+
+  const int x0 = b.x;
+  const int y0 = b.y;
+  const int x1 = b.right();
+  const int y1 = b.bottom();
+  auto selected = [sel](int x, int y) {
+    return sel->sample(x, y) > 0.5f;
+  };
+  selectionSegments_.reserve(256);
+  for (int y = y0; y < y1; ++y) {
+    for (int x = x0; x < x1; ++x) {
+      if (!selected(x, y)) continue;
+      // Edge to the left neighbor.
+      if (!selected(x - 1, y)) {
+        selectionSegments_.emplace_back(QPointF(x, y), QPointF(x, y + 1));
+      }
+      // Edge to the right neighbor.
+      if (!selected(x + 1, y)) {
+        selectionSegments_.emplace_back(QPointF(x + 1, y),
+                                        QPointF(x + 1, y + 1));
+      }
+      // Edge to the top neighbor.
+      if (!selected(x, y - 1)) {
+        selectionSegments_.emplace_back(QPointF(x, y), QPointF(x + 1, y));
+      }
+      // Edge to the bottom neighbor.
+      if (!selected(x, y + 1)) {
+        selectionSegments_.emplace_back(QPointF(x, y + 1),
+                                        QPointF(x + 1, y + 1));
+      }
+    }
+  }
+}
+
+QRect CanvasView::selectionWidgetRect() const {
+  if (selectionBounds_.isEmpty()) return QRect();
+  return widgetRectForPixels(selectionBounds_).adjusted(-2, -2, 2, 2);
 }
 
 void CanvasView::refreshBrushCursor() {
@@ -185,6 +272,18 @@ void CanvasView::paintEvent(QPaintEvent*) {
                      tr("No document — File → New or File → Open"));
     return;
   }
+
+  // Detect an out-of-band selection change (menu ops, undo/redo) and
+  // refresh the cached ants overlay before painting.
+  if (doc_->selection() != lastSelection_) {
+    rebuildSelectionSegments();
+    if (selectionSegments_.empty()) {
+      antsTimer_->stop();
+    } else if (!antsTimer_->isActive()) {
+      antsTimer_->start();
+    }
+  }
+
   if (dirty_) {
     if (dirtyRect_.isEmpty()) {
       recomposite();
@@ -230,6 +329,50 @@ void CanvasView::paintEvent(QPaintEvent*) {
   painter.setBrush(Qt::NoBrush);
   painter.drawRect(docRect);
 
+  // Marching-ants overlay for the active selection. Black solid underlay
+  // plus a white dashed stroke whose dashOffset is animated by antsTimer_
+  // so the ants appear to crawl along the boundary.
+  if (!selectionSegments_.empty()) {
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    painter.save();
+    painter.translate(pan_);
+    painter.scale(zoom_, zoom_);
+    QPen black(QColor(0, 0, 0, 220), 1.0);
+    black.setCosmetic(true);
+    painter.setPen(black);
+    painter.drawLines(selectionSegments_.data(),
+                      static_cast<int>(selectionSegments_.size()));
+    QPen white(QColor(255, 255, 255, 240), 1.0);
+    white.setCosmetic(true);
+    white.setStyle(Qt::CustomDashLine);
+    white.setDashPattern({4.0, 4.0});
+    white.setDashOffset(static_cast<double>(antsPhase_));
+    painter.setPen(white);
+    painter.drawLines(selectionSegments_.data(),
+                      static_cast<int>(selectionSegments_.size()));
+    painter.restore();
+  }
+
+  // Rubber-band rectangle while a MarqueeTool drag is in progress.
+  if (tool_) {
+    if (auto* marquee = dynamic_cast<MarqueeTool*>(tool_)) {
+      if (auto r = marquee->liveRect()) {
+        painter.setRenderHint(QPainter::Antialiasing, false);
+        QPointF tl = canvasToWidget(QPointF(r->x, r->y));
+        QPointF br2 = canvasToWidget(QPointF(r->right(), r->bottom()));
+        QRectF rubber(tl, br2);
+        QPen black(QColor(0, 0, 0, 220), 1.0);
+        painter.setPen(black);
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRect(rubber);
+        QPen white(QColor(255, 255, 255, 240), 1.0);
+        white.setStyle(Qt::DashLine);
+        painter.setPen(white);
+        painter.drawRect(rubber);
+      }
+    }
+  }
+
   // Brush cursor ring. Drawn as concentric black+white 1-px strokes so the
   // outline stays legible against any painted color.
   if (cursorInCanvas_ && tool_) {
@@ -264,8 +407,11 @@ void CanvasView::wheelEvent(QWheelEvent* e) {
 }
 
 void CanvasView::mousePressEvent(QMouseEvent* e) {
+  const bool shiftLeft = (e->button() == Qt::LeftButton &&
+                          (e->modifiers() & Qt::ShiftModifier));
+  const bool toolClaimsShift = tool_ && tool_->consumesShiftClick();
   if (e->button() == Qt::MiddleButton ||
-      (e->button() == Qt::LeftButton && (e->modifiers() & Qt::ShiftModifier))) {
+      (shiftLeft && !toolClaimsShift)) {
     panning_ = true;
     panStart_ = e->pos();
     panStartOffset_ = pan_;
@@ -274,6 +420,7 @@ void CanvasView::mousePressEvent(QMouseEvent* e) {
     return;
   }
   if (tool_ && doc_ && e->button() == Qt::LeftButton) {
+    tool_->setModifiers(translateModifiers(e->modifiers()));
     const QPointF ip = (QPointF(e->pos()) - pan_) / zoom_;
     tool_->press(*doc_, static_cast<float>(ip.x()),
                  static_cast<float>(ip.y()), MouseButton::Left);
@@ -284,6 +431,11 @@ void CanvasView::mousePressEvent(QMouseEvent* e) {
       requestRecomposite(dirty);
     } else {
       requestRecomposite();
+    }
+    // Also invalidate the rubber-band rect region if the tool is a marquee
+    // (press may set a 1-px live rect that needs drawing).
+    if (auto* m = dynamic_cast<MarqueeTool*>(tool_)) {
+      if (auto r = m->liveRect()) update(widgetRectForPixels(*r));
     }
     e->accept();
     return;
@@ -304,11 +456,21 @@ void CanvasView::mouseMoveEvent(QMouseEvent* e) {
   cursorInCanvas_ = true;
   moveBrushCursorTo(QPointF(e->pos()));
   if (painting_ && tool_ && doc_) {
+    // Capture the rubber-band rect BEFORE the move so we can invalidate
+    // its old widget-space extent; then compute a new one after.
+    std::optional<Rect> preRect;
+    if (auto* m = dynamic_cast<MarqueeTool*>(tool_)) preRect = m->liveRect();
+
     const QPointF ip = (QPointF(e->pos()) - pan_) / zoom_;
     tool_->move(*doc_, static_cast<float>(ip.x()),
                 static_cast<float>(ip.y()));
     const Rect dirty = tool_->takeDirtyRect();
     if (!dirty.isEmpty()) requestRecomposite(dirty);
+
+    if (auto* m = dynamic_cast<MarqueeTool*>(tool_)) {
+      if (preRect) update(widgetRectForPixels(*preRect));
+      if (auto r = m->liveRect()) update(widgetRectForPixels(*r));
+    }
     e->accept();
     return;
   }
@@ -340,12 +502,17 @@ void CanvasView::mouseReleaseEvent(QMouseEvent* e) {
   }
   moveBrushCursorTo(QPointF(e->pos()));
   if (painting_ && tool_ && doc_ && e->button() == Qt::LeftButton) {
+    std::optional<Rect> preRect;
+    if (auto* m = dynamic_cast<MarqueeTool*>(tool_)) preRect = m->liveRect();
+
     const QPointF ip = (QPointF(e->pos()) - pan_) / zoom_;
     tool_->release(*doc_, static_cast<float>(ip.x()),
                    static_cast<float>(ip.y()), MouseButton::Left);
     painting_ = false;
     const Rect dirty = tool_->takeDirtyRect();
     if (!dirty.isEmpty()) requestRecomposite(dirty);
+    // Wipe any lingering rubber-band.
+    if (preRect) update(widgetRectForPixels(*preRect));
     emit layerPainted();
     e->accept();
     return;

@@ -10,6 +10,16 @@ class Document;
 
 enum class MouseButton { Left, Middle, Right, Other };
 
+// Modifier bitmask passed to tools via `setModifiers()` before press/move/
+// release. Kept Qt-free so tuxels_core has no GUI dependency; CanvasView
+// translates Qt::KeyboardModifiers into this bitmask at the call site.
+namespace Mod {
+inline constexpr int None = 0;
+inline constexpr int Shift = 1 << 0;
+inline constexpr int Alt = 1 << 1;
+inline constexpr int Ctrl = 1 << 2;
+}  // namespace Mod
+
 // Abstract base for editing tools. CanvasView forwards widget mouse events
 // to the active tool, converting coordinates to document image-space first.
 class ToolBase {
@@ -28,6 +38,20 @@ class ToolBase {
   // image-space pixels so the canvas can draw a preview ring under the
   // cursor. std::nullopt → no ring (e.g. Move, Eyedropper).
   virtual std::optional<float> cursorRadiusPx() const { return std::nullopt; }
+
+  // True if the tool wants to receive Shift+Left clicks. When false,
+  // CanvasView treats Shift+Left as a pan gesture (existing behavior).
+  // Marquee-style tools override to read Shift as an add-to-selection
+  // modifier.
+  virtual bool consumesShiftClick() const { return false; }
+
+  // Called by CanvasView before each press/move/release so the tool can
+  // branch on current modifier state (e.g. marquee Add/Subtract/Intersect).
+  void setModifiers(int flags) noexcept { modifiers_ = flags; }
+  int modifiers() const noexcept { return modifiers_; }
+
+ protected:
+  int modifiers_ = 0;
 };
 
 }  // namespace tuxels

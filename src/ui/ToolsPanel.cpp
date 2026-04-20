@@ -1,5 +1,6 @@
 #include "ui/ToolsPanel.h"
 
+#include <QButtonGroup>
 #include <QColorDialog>
 #include <QFormLayout>
 #include <QFrame>
@@ -66,8 +67,44 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
   vbox->setContentsMargins(8, 8, 8, 8);
   vbox->setSpacing(8);
 
+  // -- Tool picker --------------------------------------------------------
+  auto* pickerRow = new QWidget(root);
+  auto* pickerLayout = new QHBoxLayout(pickerRow);
+  pickerLayout->setContentsMargins(0, 0, 0, 0);
+  pickerLayout->setSpacing(4);
+  auto* pickerGroup = new QButtonGroup(this);
+  pickerGroup->setExclusive(true);
+
+  pickBrushBtn_ = new QToolButton(pickerRow);
+  pickBrushBtn_->setText("B");
+  pickBrushBtn_->setToolTip(tr("Brush  (B)"));
+  pickBrushBtn_->setCheckable(true);
+  pickBrushBtn_->setChecked(true);
+  pickerGroup->addButton(pickBrushBtn_);
+  connect(pickBrushBtn_, &QToolButton::clicked, this,
+          [this]() { emit toolPicked(ToolId::Brush); });
+
+  pickMarqueeBtn_ = new QToolButton(pickerRow);
+  pickMarqueeBtn_->setText("M");
+  pickMarqueeBtn_->setToolTip(tr("Rectangular Marquee  (M)"));
+  pickMarqueeBtn_->setCheckable(true);
+  pickerGroup->addButton(pickMarqueeBtn_);
+  connect(pickMarqueeBtn_, &QToolButton::clicked, this,
+          [this]() { emit toolPicked(ToolId::Marquee); });
+
+  pickerLayout->addWidget(pickBrushBtn_);
+  pickerLayout->addWidget(pickMarqueeBtn_);
+  pickerLayout->addStretch(1);
+  vbox->addWidget(pickerRow);
+
+  // -- Brush group (hidden when non-brush tools are active) ---------------
+  brushGroup_ = new QWidget(root);
+  auto* brushVbox = new QVBoxLayout(brushGroup_);
+  brushVbox->setContentsMargins(0, 0, 0, 0);
+  brushVbox->setSpacing(8);
+
   // -- Color swatches -----------------------------------------------------
-  auto* colorGroup = new QWidget(root);
+  auto* colorGroup = new QWidget(brushGroup_);
   auto* colorLayout = new QHBoxLayout(colorGroup);
   colorLayout->setContentsMargins(0, 0, 0, 0);
   colorLayout->setSpacing(4);
@@ -98,17 +135,17 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
   colorLayout->addWidget(swapBtn_);
   colorLayout->addWidget(resetBtn_);
   colorLayout->addStretch(1);
-  vbox->addWidget(colorGroup);
+  brushVbox->addWidget(colorGroup);
 
   // -- Brush parameters ---------------------------------------------------
-  auto* brushHeader = new QLabel(tr("<b>Brush</b>"), root);
-  vbox->addWidget(brushHeader);
+  auto* brushHeader = new QLabel(tr("<b>Brush</b>"), brushGroup_);
+  brushVbox->addWidget(brushHeader);
 
   auto* form = new QFormLayout();
   form->setContentsMargins(0, 0, 0, 0);
   form->setSpacing(4);
 
-  auto* sizeRow = new QWidget(root);
+  auto* sizeRow = new QWidget(brushGroup_);
   auto* sizeLayout = new QHBoxLayout(sizeRow);
   sizeLayout->setContentsMargins(0, 0, 0, 0);
   sizeSlider_ = new QSlider(Qt::Horizontal, sizeRow);
@@ -127,7 +164,7 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
   form->addRow(tr("Size"), sizeRow);
 
   auto makePctRow = [&](QSlider*& slider, QLabel*& label) {
-    auto* row = new QWidget(root);
+    auto* row = new QWidget(brushGroup_);
     auto* layout = new QHBoxLayout(row);
     layout->setContentsMargins(0, 0, 0, 0);
     slider = new QSlider(Qt::Horizontal, row);
@@ -156,11 +193,18 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
           &ToolsPanel::onFlowChanged);
   form->addRow(tr("Flow"), flowRow);
 
-  vbox->addLayout(form);
+  brushVbox->addLayout(form);
+  vbox->addWidget(brushGroup_);
   vbox->addStretch(1);
   setWidget(root);
 
   updateSwatchColors();
+}
+
+void ToolsPanel::setActiveTool(ToolId id) {
+  if (pickBrushBtn_) pickBrushBtn_->setChecked(id == ToolId::Brush);
+  if (pickMarqueeBtn_) pickMarqueeBtn_->setChecked(id == ToolId::Marquee);
+  if (brushGroup_) brushGroup_->setVisible(id == ToolId::Brush);
 }
 
 void ToolsPanel::setBrushTool(BrushTool* tool) {

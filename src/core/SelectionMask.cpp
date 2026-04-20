@@ -130,6 +130,45 @@ void SelectionMask::invert() {
   }
 }
 
+bool SelectionMask::isEmpty(float epsilon) const {
+  for (const auto& [tc, ptr] : image_.tiles()) {
+    if (!ptr) continue;
+    const Rgba32F* d = ptr->data();
+    for (int i = 0; i < kTilePixels; ++i) {
+      if (d[i].r > epsilon) return false;
+    }
+  }
+  return true;
+}
+
+Rect SelectionMask::boundsOfSelected(float threshold) const {
+  const int w = image_.width();
+  const int h = image_.height();
+  if (w <= 0 || h <= 0) return {};
+  int minX = w, minY = h, maxX = -1, maxY = -1;
+  for (const auto& [tc, ptr] : image_.tiles()) {
+    if (!ptr) continue;
+    const int tileX0 = tc.tx * kTilePx;
+    const int tileY0 = tc.ty * kTilePx;
+    const int lx1 = std::min(kTilePx, w - tileX0);
+    const int ly1 = std::min(kTilePx, h - tileY0);
+    for (int y = 0; y < ly1; ++y) {
+      for (int x = 0; x < lx1; ++x) {
+        if (ptr->at(x, y).r > threshold) {
+          const int gx = tileX0 + x;
+          const int gy = tileY0 + y;
+          if (gx < minX) minX = gx;
+          if (gy < minY) minY = gy;
+          if (gx > maxX) maxX = gx;
+          if (gy > maxY) maxY = gy;
+        }
+      }
+    }
+  }
+  if (maxX < minX) return {};
+  return Rect{minX, minY, maxX - minX + 1, maxY - minY + 1};
+}
+
 std::unique_ptr<SelectionMask> SelectionMask::clone() const {
   auto out = std::make_unique<SelectionMask>(image_.width(), image_.height());
   for (const auto& [tc, ptr] : image_.tiles()) {
