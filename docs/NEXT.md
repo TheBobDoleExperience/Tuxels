@@ -4,46 +4,46 @@
 
 ## Immediately Next
 
-**M2-S6 — Brush dynamics.** S0/S1/S2/S3/S4/S5 landed 2026-04-20 (layer
-origins + Place + Move + Free Transform + Lasso/PolyLasso + Select By
-Color). Next up: per-stamp size/opacity jitter so the brush feels less
-mechanical, plus a Spacing slider surfaced alongside.
+**M2-S7 — Verify + tag `v0.2.0-m2`.** S0–S6 all landed 2026-04-20. What's
+left is a user-facing walkthrough on the live binary + the final git tag.
 
-- `src/brush/RoundBrush.h`: extend `RoundBrushParams` with `float sizeJitter = 0.f, opacityJitter = 0.f, pressureMultiplier = 1.f;`
-  (spacingRatio already exists — expose it in the UI, below).
-- `src/brush/BrushEngine.{h,cpp}` (`applyStamp`, `beginStroke`,
-  `continueStroke`): thread-local `std::mt19937` seeded from a hash of
-  a per-stroke id (monotonic counter bumped in `beginStroke`). Each
-  stamp draws `U(-jitter,+jitter)` → `diameter *= 1 + u`, clamped to
-  `[1, 2×diameter]`; same for opacity but clamped to `[0, 1]`. With
-  `sizeJitter = 0` + `opacityJitter = 0`, output must be bitwise
-  identical to the current brush (regression floor).
-- `pressureMultiplier` is an input stub — tablet integration deferred
-  to M3+. Leave it on the params and thread into `applyStamp` so later
-  tablet work slots in without touching the params struct.
-- `src/ui/ToolsPanel.{h,cpp}`: Brush options row gains **Size Jitter**,
-  **Opacity Jitter**, **Spacing** sliders (0–100 % each, where spacing
-  maps to `spacingRatio` ∈ `[0.05, 1.0]`). Slider changes push into the
-  brush via the existing setter pattern.
-- Tests: `test_brush_dynamics` — jitter=0 is bitwise identical to the
-  pre-change brush on a fixed stroke; jitter>0 produces bounded,
-  *deterministic* variance (same seed → same pixels, different seeds
-  → different pixels); spacing slider changes visible stamp count
-  on a long stroke.
+The DoD walkthrough (plan §S7):
 
-After S6:
+1. Open a fresh doc (or load an existing `.txl`), then `File → Place…`
+   (Ctrl+Shift+P) an oversized PNG — verify it centers in the doc and
+   keeps its offscreen pixels (they become visible after a Move).
+2. Switch to Move (V), drag the placed layer. Confirm the live repaint
+   stays snappy (partial-recomposite only the union of old+new doc
+   footprint). Undo/redo should swap origins cleanly.
+3. Switch to Free Transform (Ctrl+T). Drag corners to scale, inside the
+   quad to translate, outside to rotate. Confirm preview is bilinear /
+   premultiplied (no rotation halos). Enter commits, Escape cancels,
+   tool-switch auto-commits. Undo restores the pre-transform image +
+   origin.
+4. Lasso (L): freehand drag to make a feathered-boundary selection.
+   Polygonal Lasso (P): click vertices, close on near-start click or
+   Enter. Verify Shift / Alt / Shift+Alt combine modes at press-time
+   win over the persistent options row, and that the options row is the
+   hijack-proof fallback on GNOME (Alt-drag goes to the WM).
+5. Magic Wand (W) + Select By Color (Shift+W cycles). Click on a color
+   region, verify contiguous vs non-contiguous behavior differs, the
+   tolerance slider is shared (same 0–255 slider drives both), and the
+   combine-mode buttons apply to both.
+6. Brush (B): paint with Size Jitter / Opacity Jitter / Spacing sliders
+   at non-zero values. Confirm strokes look organic (per-stamp variance)
+   and that dropping jitter to 0 restores mechanical Photoshop-like
+   output.
+7. `File → Save As…` as `.txl`, close the doc, re-open — confirm layer
+   origins, selection, active layer, and paint target all round-trip.
+8. Tag: `git tag -a v0.2.0-m2 -m "M2 — Position, Shape, Stroke Quality"`
+   once the user signs off.
 
-- S7 — Verify + tag `v0.2.0-m2`. User walkthrough through the full M2
-  feature set; round-trip through `.txl`; tag.
+Final test gate: `cmake --build build && ctest --test-dir build` green
+(20 executables, 214 cases); no new warnings; `QT_QPA_PLATFORM=offscreen
+timeout 2 ./build/tuxels` clean boot.
 
-Expected deliverables per step (mirrors M1 shape):
-
-1. Shipping UI wiring with menu + shortcut.
-2. Unit tests for the headless / pure-C++ pieces (lives in
-   `tuxels_core` when possible).
-3. STATUS / NEXT / ARCHITECTURE doc updates.
-4. A user-verification step at the end of the milestone before
-   tagging `v0.2.0-m2`.
+After S7: milestone M2 shipped. Next milestone kickoff discussion
+(Adjustments — Levels/Curves — was deferred to M3 at the M2 kickoff).
 
 ## Cold-Start Checklist
 
@@ -54,6 +54,6 @@ Expected deliverables per step (mirrors M1 shape):
    plan (authoritative).
 5. `git log --oneline -10` — recent commits.
 6. `cmake --build build && ctest --test-dir build` — confirm green
-   tree (expect 207 passing test cases — 19 ctest executables — as of
-   M2-S5 ship).
+   tree (expect 214 passing test cases — 20 ctest executables — as of
+   M2-S6 ship).
 7. Pick up "Immediately Next" above.
