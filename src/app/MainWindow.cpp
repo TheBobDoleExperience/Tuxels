@@ -16,6 +16,7 @@
 #include "core/SelectionMask.h"
 #include "history/CropCommand.h"
 #include "history/LayerOpCommand.h"
+#include "history/MoveLayerCommand.h"
 #include "history/PaintCommand.h"
 #include "history/SelectionCommand.h"
 #include "history/UndoStack.h"
@@ -28,6 +29,7 @@
 #include "tools/CropTool.h"
 #include "tools/MagicWandTool.h"
 #include "tools/MarqueeTool.h"
+#include "tools/MoveTool.h"
 #include "ui/CanvasView.h"
 #include "ui/LayersPanel.h"
 #include "ui/ToolsPanel.h"
@@ -43,6 +45,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   bucketTool_ = std::make_unique<BucketTool>();
   wandTool_ = std::make_unique<MagicWandTool>();
   cropTool_ = std::make_unique<CropTool>();
+  moveTool_ = std::make_unique<MoveTool>();
   undoStack_ = std::make_unique<UndoStack>(/*maxDepth=*/64);
 
   canvas_ = new CanvasView(this);
@@ -185,6 +188,12 @@ void MainWindow::buildMenus() {
   connect(pickCrop, &QAction::triggered, this,
           [this]() { setActiveTool(ToolId::Crop); });
   addAction(pickCrop);
+
+  auto* pickMove = new QAction(this);
+  pickMove->setShortcut(QKeySequence(tr("V")));
+  connect(pickMove, &QAction::triggered, this,
+          [this]() { setActiveTool(ToolId::Move); });
+  addAction(pickMove);
 }
 
 void MainWindow::buildDocks() {
@@ -644,6 +653,21 @@ void MainWindow::onLayerPainted() {
                                2000);
     }
   }
+  // Move commit. The live drag already installed the new origin; we just
+  // record the (before, after) pair so undo/redo can swap. apply() on the
+  // command is idempotent against the already-set origin, so pushing it
+  // here doesn't double-apply.
+  if (moveTool_) {
+    if (auto commit = moveTool_->takeCommit()) {
+      undoStack_->push(std::make_unique<MoveLayerCommand>(
+          doc_.get(), commit->layerId, commit->beforeX, commit->beforeY,
+          commit->afterX, commit->afterY));
+      statusBar()->showMessage(tr("Moved layer to (%1, %2)")
+                                   .arg(commit->afterX)
+                                   .arg(commit->afterY),
+                               1500);
+    }
+  }
   if (layersPanel_) layersPanel_->refresh();
 }
 
@@ -665,6 +689,9 @@ void MainWindow::setActiveTool(ToolId id) {
       break;
     case ToolId::Crop:
       if (canvas_) canvas_->setTool(cropTool_.get());
+      break;
+    case ToolId::Move:
+      if (canvas_) canvas_->setTool(moveTool_.get());
       break;
   }
   if (canvas_) canvas_->setToolCursor(CanvasView::cursorForTool(id));

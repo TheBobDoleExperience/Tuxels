@@ -118,11 +118,20 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
   connect(pickCropBtn_, &QToolButton::clicked, this,
           [this]() { emit toolPicked(ToolId::Crop); });
 
+  pickMoveBtn_ = new QToolButton(pickerRow);
+  pickMoveBtn_->setText("V");
+  pickMoveBtn_->setToolTip(tr("Move  (V)"));
+  pickMoveBtn_->setCheckable(true);
+  pickerGroup->addButton(pickMoveBtn_);
+  connect(pickMoveBtn_, &QToolButton::clicked, this,
+          [this]() { emit toolPicked(ToolId::Move); });
+
   pickerLayout->addWidget(pickBrushBtn_);
   pickerLayout->addWidget(pickMarqueeBtn_);
   pickerLayout->addWidget(pickBucketBtn_);
   pickerLayout->addWidget(pickWandBtn_);
   pickerLayout->addWidget(pickCropBtn_);
+  pickerLayout->addWidget(pickMoveBtn_);
   pickerLayout->addStretch(1);
   vbox->addWidget(pickerRow);
 
@@ -396,6 +405,7 @@ void ToolsPanel::setActiveTool(ToolId id) {
   if (pickBucketBtn_) pickBucketBtn_->setChecked(id == ToolId::Bucket);
   if (pickWandBtn_) pickWandBtn_->setChecked(id == ToolId::MagicWand);
   if (pickCropBtn_) pickCropBtn_->setChecked(id == ToolId::Crop);
+  if (pickMoveBtn_) pickMoveBtn_->setChecked(id == ToolId::Move);
   if (brushGroup_) brushGroup_->setVisible(id == ToolId::Brush);
   if (marqueeGroup_) marqueeGroup_->setVisible(id == ToolId::Marquee);
   if (bucketGroup_) bucketGroup_->setVisible(id == ToolId::Bucket);

@@ -4,34 +4,38 @@
 
 ## Immediately Next
 
-**M2-S2 — Move tool (V).** S0/S1 landed 2026-04-20 (layer origins + v2
-`.txl` + `File → Place…` centered import). Next step wires a dedicated
-Move tool that drags the active layer's **origin** — pixels don't
-change.
+**M2-S3 — Free Transform (Ctrl+T).** S0/S1/S2 landed 2026-04-20 (layer
+origins + Place + Move). Next up: a modal transform tool covering scale
++ rotate + translate, committed through the existing tile-COW undo
+pipeline so redo replays the final resampled pixels instead of
+re-running the affine.
 
-- `src/tools/ToolId.h`: add `Move`.
-- `src/tools/MoveTool.{h,cpp}`: on press, snapshot active layer's
-  `(originX, originY)` and the press point in doc coords. On move,
-  expose the live delta via an extension of `ToolBase` (prefer adding
-  `std::optional<QPoint> liveLayerOffset()` rather than introducing a
-  new overlay channel). On release, push
-  `MoveLayerCommand(layerId, beforeOrigin, afterOrigin)`.
-- `src/history/MoveLayerCommand.{h,cpp}` (new): trivial origin swap on
-  `apply` / `undo`. Full-recomposite invalidate (movement is rarely
-  tile-local).
-- `src/ui/CanvasView.cpp`: while a Move tool has a live offset, paint
-  the composite with the active layer's origin temporarily overridden
-  — reuses the `LayerOverride` hook planned for S3's Free Transform
-  preview (so we build the override path once).
-- `src/ui/ToolsPanel.{h,cpp}`: Move (V) button; no options row yet.
-- `src/app/MainWindow.cpp`: tool wiring + V shortcut + commit pop in
-  `onLayerPainted` (promote a `PendingMove` similar to `PendingCrop`).
-- Tests: `test_move_layer` — push command, verify composite output
-  differs by origin delta only, undo/redo restores origin exactly.
+- `src/geom/Resample.{h,cpp}` (new): bilinear sample of a source
+  `TuxImage` through an affine transform. Iterates destination pixels
+  in doc coords, samples source in layer-local coords via
+  `TileRowCursor`, respects the active selection if present.
+- `src/tools/TransformTool.{h,cpp}` (new): owns a scratch `TuxImage`
+  sized to the current transform's bbox. Handle drag re-resamples at
+  view resolution while the user is adjusting; commit resamples at
+  doc resolution into the real layer via
+  `beginRecord/setPixel/stopRecord`.
+- `src/compositor/compose.cpp`: add an overload accepting a
+  `LayerOverride` keyed by layer id (substitute image + origin for the
+  transformed layer during preview) — keeps the blend pipeline
+  untouched and lines up with the future S2 live-preview path too.
+- UI: 8 bbox handles (corners = scale, edges = axis-locked scale,
+  outside bbox = rotate, inside bbox = translate), `Shift` constrains
+  aspect or snaps rotation to 15°, `Enter`/double-click commits,
+  `Escape`/right-click cancels, tool-switch while pending prompts.
+- Commit path: `PaintCommand` (full tile-COW) plus a
+  `MoveLayerCommand` (or a combined `TransformCommand`) for the origin
+  delta. Reuses S2's id-based origin swap.
+- Tests: `test_resample` (identity is bitwise, 90° round-trips, 2×
+  scale spot checks), `test_transform_command` (undo restores pixels +
+  origin).
 
-After S2:
+After S3:
 
-- S3 — Free Transform (Ctrl+T); `geom/Resample` bilinear + bbox handles.
 - S4 — Lasso + Polygonal Lasso; `SelectionMask::fillPolygon` scanline.
 - S5 — Select by Color; Shift-W cycles from Wand.
 - S6 — Brush dynamics (size / opacity jitter, spacing).
@@ -55,5 +59,5 @@ Expected deliverables per step (mirrors M1 shape):
    plan (authoritative).
 5. `git log --oneline -10` — recent commits.
 6. `cmake --build build && ctest --test-dir build` — confirm green
-   tree (expect 145 passing tests as of M2-S1 ship).
+   tree (expect 151 passing tests as of M2-S2 ship).
 7. Pick up "Immediately Next" above.

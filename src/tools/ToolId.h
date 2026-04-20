@@ -8,6 +8,7 @@ enum class ToolId {
   Bucket,
   MagicWand,
   Crop,
+  Move,
 };
 
 }  // namespace tuxels

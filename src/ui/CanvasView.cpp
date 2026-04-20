@@ -176,6 +176,8 @@ QCursor CanvasView::cursorForTool(ToolId id) {
       return makeWandCursor();
     case ToolId::Crop:
       return makeCropCursor();
+    case ToolId::Move:
+      return QCursor(Qt::SizeAllCursor);
   }
   return QCursor(Qt::ArrowCursor);
 }
