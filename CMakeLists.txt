@@ -30,6 +30,7 @@ set(TUXELS_CORE_SOURCES
   src/geom/Resample.cpp
   src/history/CropCommand.cpp
   src/history/MoveLayerCommand.cpp
+  src/history/TransformCommand.cpp
   src/io/TxlIO.cpp
   src/tools/BrushTool.cpp
   src/tools/BucketTool.cpp
@@ -98,6 +99,7 @@ tuxels_add_test(test_layer_origin)
 tuxels_add_test(test_place_image)
 tuxels_add_test(test_move_layer)
 tuxels_add_test(test_resample)
+tuxels_add_test(test_transform_command)
 
 add_executable(test_png_io tests/test_png_io.cpp)
 set_target_properties(test_png_io PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
