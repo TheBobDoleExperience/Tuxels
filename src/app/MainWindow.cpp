@@ -13,8 +13,10 @@
 
 #include "compositor/compose.h"
 #include "core/Document.h"
+#include "core/SelectionMask.h"
 #include "history/LayerOpCommand.h"
 #include "history/PaintCommand.h"
+#include "history/SelectionCommand.h"
 #include "history/UndoStack.h"
 #include "io/PngIO.h"
 #include "layers/LayerMask.h"
@@ -94,7 +96,17 @@ void MainWindow::buildMenus() {
   auto* delMaskAct = layerMenu->addAction(tr("D&elete Layer Mask"));
   connect(delMaskAct, &QAction::triggered, this, &MainWindow::onDeleteLayerMask);
 
-  mb->addMenu(tr("&Select"));
+  auto* selectMenu = mb->addMenu(tr("&Select"));
+  auto* selectAllAct = selectMenu->addAction(tr("&All"));
+  selectAllAct->setShortcut(QKeySequence::SelectAll);
+  connect(selectAllAct, &QAction::triggered, this, &MainWindow::onSelectAll);
+  auto* deselectAct = selectMenu->addAction(tr("&Deselect"));
+  deselectAct->setShortcut(QKeySequence(tr("Ctrl+D")));
+  connect(deselectAct, &QAction::triggered, this, &MainWindow::onDeselect);
+  auto* inverseAct = selectMenu->addAction(tr("&Inverse"));
+  inverseAct->setShortcut(QKeySequence(tr("Ctrl+Shift+I")));
+  connect(inverseAct, &QAction::triggered, this, &MainWindow::onSelectInverse);
+
   mb->addMenu(tr("&Filter"));
   mb->addMenu(tr("&View"));
   mb->addMenu(tr("&Window"));
@@ -587,6 +599,38 @@ void MainWindow::onBrushSizeDecrease() {
   if (canvas_) canvas_->refreshBrushCursor();
   statusBar()->showMessage(
       tr("Brush size: %1").arg(brushTool_->brush().diameter()), 1500);
+}
+
+void MainWindow::onSelectAll() {
+  if (!doc_ || doc_->width() <= 0 || doc_->height() <= 0) return;
+  auto before = doc_->selection() ? doc_->selection()->clone() : nullptr;
+  doc_->setSelection(SelectionMask::makeAll(doc_->width(), doc_->height()));
+  auto after = doc_->selection()->clone();
+  undoStack_->push(std::make_unique<SelectionCommand>(
+      doc_.get(), std::move(before), std::move(after), "Select All"));
+  statusBar()->showMessage(tr("Selection: all"), 1500);
+}
+
+void MainWindow::onDeselect() {
+  if (!doc_ || !doc_->selection()) return;
+  auto before = doc_->selection()->clone();
+  doc_->setSelection(nullptr);
+  undoStack_->push(std::make_unique<SelectionCommand>(
+      doc_.get(), std::move(before), nullptr, "Deselect"));
+  statusBar()->showMessage(tr("Deselected"), 1500);
+}
+
+void MainWindow::onSelectInverse() {
+  // Photoshop greys out Inverse when nothing is selected; mirror that.
+  if (!doc_ || !doc_->selection()) return;
+  auto before = doc_->selection()->clone();
+  auto inverted = doc_->selection()->clone();
+  inverted->invert();
+  doc_->setSelection(std::move(inverted));
+  auto after = doc_->selection()->clone();
+  undoStack_->push(std::make_unique<SelectionCommand>(
+      doc_.get(), std::move(before), std::move(after), "Inverse Selection"));
+  statusBar()->showMessage(tr("Selection inverted"), 1500);
 }
 
 }  // namespace tuxels

@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/SelectionMask.h"
+
 namespace tuxels {
 
 void BrushEngine::growBounds(int x0, int y0, int x1, int y1) {
@@ -43,7 +45,9 @@ void BrushEngine::applyStamp(float cx, float cy) {
     for (int x = xMin; x < xMax; ++x) {
       const float k = brush_.kernel(x - x0, y - y0);
       if (k <= 0.f) continue;
-      const float a = k * op * flow * col.a;
+      const float s = selection_ ? selection_->sample(x, y) : 1.f;
+      if (s <= 0.f) continue;
+      const float a = k * op * flow * col.a * s;
       if (a <= 0.f) continue;
       const Rgba32F surface = target_.getPixel(x, y);
       const float inv = 1.f - a;

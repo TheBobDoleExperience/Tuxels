@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 
+#include "core/SelectionMask.h"
 #include "layers/LayerBase.h"
 #include "layers/LayerTree.h"
 #include "layers/PixelLayer.h"
@@ -38,6 +39,15 @@ class Document {
   PaintTarget paintTarget() const noexcept { return paintTarget_; }
   void setPaintTarget(PaintTarget t) noexcept { paintTarget_ = t; }
 
+  // The active selection, or nullptr when "nothing selected == paint
+  // everywhere". Tools consult this when writing pixels; the compositor
+  // does not (selection is edit-time, not display-time).
+  SelectionMask* selection() noexcept { return selection_.get(); }
+  const SelectionMask* selection() const noexcept { return selection_.get(); }
+  void setSelection(std::unique_ptr<SelectionMask> sel) {
+    selection_ = std::move(sel);
+  }
+
   LayerBase* activeLayer() {
     if (activeLayerIndex_ < 0) return nullptr;
     return tree_.at(static_cast<std::size_t>(activeLayerIndex_));
@@ -68,6 +78,7 @@ class Document {
   int activeLayerIndex_ = -1;
   LayerId nextId_ = 0;
   PaintTarget paintTarget_ = PaintTarget::Layer;
+  std::unique_ptr<SelectionMask> selection_;
 };
 
 }  // namespace tuxels

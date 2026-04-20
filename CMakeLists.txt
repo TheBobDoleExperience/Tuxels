@@ -21,6 +21,7 @@ endif()
 add_compile_options(-Wall -Wextra -Wpedantic -Werror=return-type)
 
 set(TUXELS_CORE_SOURCES
+  src/core/SelectionMask.cpp
   src/layers/PixelLayer.cpp
   src/compositor/compose.cpp
   src/brush/RoundBrush.cpp
@@ -75,6 +76,7 @@ tuxels_add_test(test_blend_modes)
 tuxels_add_test(test_compositor)
 tuxels_add_test(test_brush)
 tuxels_add_test(test_undo)
+tuxels_add_test(test_selection)
 
 add_executable(test_png_io tests/test_png_io.cpp)
 set_target_properties(test_png_io PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)

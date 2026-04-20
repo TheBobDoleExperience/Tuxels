@@ -20,7 +20,7 @@ void BrushTool::press(Document& doc, float x, float y, MouseButton btn) {
     activeTarget_ = &px->mask->image;
   }
   activeTarget_->beginRecord();
-  engine_ = std::make_unique<BrushEngine>(brush_, *activeTarget_);
+  engine_ = std::make_unique<BrushEngine>(brush_, *activeTarget_, doc.selection());
   engine_->beginStroke(x, y);
 }
 

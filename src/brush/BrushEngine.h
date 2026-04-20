@@ -5,13 +5,20 @@
 
 namespace tuxels {
 
+class SelectionMask;
+
 // Drives a RoundBrush across a stroke, laying down stamps at spacing
 // intervals. Single-responsibility: paints the brush into `target` in
 // image-space; it does not know about layers, masks, or UI.
+//
+// If `selection` is non-null, per-pixel deposit is multiplied by
+// `selection->sample(x, y)` so strokes are clipped to the active
+// selection. Null selection means "no selection — paint everywhere".
 class BrushEngine {
  public:
-  BrushEngine(RoundBrush& brush, TuxImage& target)
-      : brush_(brush), target_(target) {}
+  BrushEngine(RoundBrush& brush, TuxImage& target,
+              const SelectionMask* selection = nullptr)
+      : brush_(brush), target_(target), selection_(selection) {}
 
   // Start a stroke at image-space (x,y). Lays an initial stamp.
   void beginStroke(float x, float y);
@@ -41,6 +48,7 @@ class BrushEngine {
 
   RoundBrush& brush_;
   TuxImage& target_;
+  const SelectionMask* selection_ = nullptr;
   bool active_ = false;
   float lastX_ = 0.f;
   float lastY_ = 0.f;

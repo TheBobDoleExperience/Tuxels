@@ -45,6 +45,9 @@ class MainWindow : public QMainWindow {
   void onLayerPaintTargetChange(LayerBase* layer, PaintTarget target);
   void onLayerMaskEnabledToggle(LayerBase* layer, bool oldVal, bool newVal);
   void onLayerDeleteMaskRequest(LayerBase* layer);
+  void onSelectAll();
+  void onDeselect();
+  void onSelectInverse();
 
  private:
   void buildMenus();

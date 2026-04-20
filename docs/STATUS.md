@@ -1,10 +1,22 @@
 # Tuxels — Current Status
 
-**One-paragraph summary:** Milestone **M0 shipped** as `v0.0.1-m0` on 2026-04-20 — a runnable Qt6 minimal editor with tiled float-RGBA layers, 13 blend modes, round-brush painting with a tools panel, raster masks, tile-COW undo/redo, PNG import/export, partial-rect recompose, and a brush-size cursor ring. 62 unit tests green. SCOPE.md (the aspirational long-term blueprint, 2026-04-17) remains the source of truth for vision. Next up: **M1 planning** — user has asked for more tools (crop, bucket, smart selection) plus a `.txl` native file format before PSD.
+**One-paragraph summary:** Milestone **M0 shipped** as `v0.0.1-m0` on 2026-04-20 (commit `be87b70`). **M1 in progress** — selection infrastructure landed in S1 (SelectionMask data structure + brush clipping + Select menu). 75 unit tests green. Plan: `/home/james/.claude/plans/steady-framing-willow.md`.
 
-## Current Milestone: M1 — Planning
+## Current Milestone: M1 — Selection, Fill, and Native Format
 
-See `NEXT.md` for M1 candidate scope.
+**Definition of Done:** rectangular marquee + marching ants, bucket fill, magic wand, crop, `.txl` native file format round-tripping doc + layers + masks + selection. See plan file for detailed DoD.
+
+### M1 Step Progress
+
+| Step | State | Notes |
+|------|-------|-------|
+| S1 — SelectionMask + brush clipping + Select menu | ✅ done | 2026-04-20; 75 tests passing (13 new in `test_selection`) |
+| S2 — Rectangular marquee + marching ants | pending | — |
+| S3 — Bucket fill + scanline flood | pending | — |
+| S4 — Magic wand (smart selection) | pending | — |
+| S5 — Crop tool + canvas resize | pending | — |
+| S6 — `.txl` native file format v1 | pending | — |
+| S7 — Verify + tag `v0.1.0-m1` | pending | — |
 
 ## Previous Milestone: M0 — Minimal Editor Bootstrap ✅
 
@@ -39,6 +51,7 @@ See `NEXT.md` for M1 candidate scope.
 - **Tools dock (left)**: foreground/background color swatches (click → color picker, X swaps, D resets to black/white) plus size / hardness / opacity / flow sliders that drive the live brush. `[`/`]` and the dock stay in sync.
 - **Paint latency fix**: `compose(tree, out, Rect)` overload restricts the tile loop to tiles touched by the current stamp; the canvas partial-recomposites and partial-uploads only those rows per mouse tick. Structural ops (layer add/delete/reorder, blend/opacity/visibility changes) still full-recompose; paint-stroke undo/redo goes through the partial path via `Command::dirtyRect()` which `PaintCommand` computes from its tile snapshot.
 - **Brush cursor ring**: concentric black/white 1-px ellipses centered on the cursor, sized to the active tool's `cursorRadiusPx()` × zoom. Only the ring's widget rect is invalidated per mouse move (partial `update()`), so the preview is cheap. `[`/`]` refresh it live.
+- **Selection model** (M1-S1): `core/SelectionMask` (1-channel over a document-sized `TuxImage`, tile-sparse fillRect/combine/invert/clone). `Document::selection()` is a nullable `unique_ptr<SelectionMask>`; null = "no selection". `BrushEngine` multiplies per-pixel deposit by `selection->sample(x,y)` so strokes are clipped to the active selection. `Select` menu wired: `All` (Ctrl+A), `Deselect` (Ctrl+D), `Inverse` (Ctrl+Shift+I) — each undoable via a dedicated `SelectionCommand`. No UI to **create** non-trivial selections yet; arrives with the marquee tool in S2.
 
 ## What Is Broken / Known Issues
 
@@ -55,4 +68,4 @@ See `NEXT.md` for M1 candidate scope.
 3. Read `ARCHITECTURE.md` — as-built decisions, don't re-derive.
 4. Read `BUILD.md` if build-related.
 5. Only after that, `SCOPE.md` for the big picture (long — skim table of contents).
-6. The approved plan is at `/home/james/.claude/plans/modular-singing-teacup.md`.
+6. The approved plan is at `/home/james/.claude/plans/steady-framing-willow.md`.
