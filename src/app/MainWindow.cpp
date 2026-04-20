@@ -19,6 +19,7 @@
 #include "history/MoveLayerCommand.h"
 #include "history/PaintCommand.h"
 #include "history/SelectionCommand.h"
+#include "history/TransformCommand.h"
 #include "history/UndoStack.h"
 #include "io/PngIO.h"
 #include "io/TxlIO.h"
@@ -30,6 +31,7 @@
 #include "tools/MagicWandTool.h"
 #include "tools/MarqueeTool.h"
 #include "tools/MoveTool.h"
+#include "tools/TransformTool.h"
 #include "ui/CanvasView.h"
 #include "ui/LayersPanel.h"
 #include "ui/ToolsPanel.h"
@@ -46,10 +48,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   wandTool_ = std::make_unique<MagicWandTool>();
   cropTool_ = std::make_unique<CropTool>();
   moveTool_ = std::make_unique<MoveTool>();
+  transformTool_ = std::make_unique<TransformTool>();
   undoStack_ = std::make_unique<UndoStack>(/*maxDepth=*/64);
 
   canvas_ = new CanvasView(this);
   canvas_->setTool(brushTool_.get());
+  canvas_->setTransformTool(transformTool_.get());
   canvas_->setToolCursor(CanvasView::cursorForTool(ToolId::Brush));
   connect(canvas_, &CanvasView::layerPainted, this, &MainWindow::onLayerPainted);
   setCentralWidget(canvas_);
@@ -101,6 +105,11 @@ void MainWindow::buildMenus() {
   auto* redoAct = editMenu->addAction(tr("&Redo"));
   redoAct->setShortcut(QKeySequence::Redo);
   connect(redoAct, &QAction::triggered, this, &MainWindow::onEditRedo);
+  editMenu->addSeparator();
+  auto* freeXformAct = editMenu->addAction(tr("Free &Transform"));
+  freeXformAct->setShortcut(QKeySequence(tr("Ctrl+T")));
+  connect(freeXformAct, &QAction::triggered, this,
+          &MainWindow::onEditFreeTransform);
 
   mb->addMenu(tr("&Image"));
 
@@ -194,6 +203,23 @@ void MainWindow::buildMenus() {
   connect(pickMove, &QAction::triggered, this,
           [this]() { setActiveTool(ToolId::Move); });
   addAction(pickMove);
+
+  // Enter / Escape — transform accept / cancel. Guarded inside the handler
+  // so they're no-ops unless the TransformTool is active; normal typing is
+  // unaffected because QInputDialogs/modals steal the key before this
+  // window-scope action sees it.
+  auto* xformAccept = new QAction(this);
+  xformAccept->setShortcuts({QKeySequence(Qt::Key_Return),
+                             QKeySequence(Qt::Key_Enter)});
+  connect(xformAccept, &QAction::triggered, this,
+          &MainWindow::onTransformAccept);
+  addAction(xformAccept);
+
+  auto* xformCancel = new QAction(this);
+  xformCancel->setShortcut(QKeySequence(Qt::Key_Escape));
+  connect(xformCancel, &QAction::triggered, this,
+          &MainWindow::onTransformCancel);
+  addAction(xformCancel);
 }
 
 void MainWindow::buildDocks() {
@@ -673,6 +699,12 @@ void MainWindow::onLayerPainted() {
 
 void MainWindow::setActiveTool(ToolId id) {
   if (id == activeToolId_) return;
+  // Leaving the Transform tool auto-applies any pending transform so the
+  // preview isn't silently discarded. User can press Escape first to
+  // discard explicitly.
+  if (activeToolId_ == ToolId::Transform && id != ToolId::Transform) {
+    commitTransformIfActive();
+  }
   activeToolId_ = id;
   switch (id) {
     case ToolId::Brush:
@@ -693,13 +725,25 @@ void MainWindow::setActiveTool(ToolId id) {
     case ToolId::Move:
       if (canvas_) canvas_->setTool(moveTool_.get());
       break;
+    case ToolId::Transform:
+      if (canvas_) canvas_->setTool(transformTool_.get());
+      break;
   }
   if (canvas_) canvas_->setToolCursor(CanvasView::cursorForTool(id));
   if (toolsPanel_) toolsPanel_->setActiveTool(id);
   if (canvas_) canvas_->refreshBrushCursor();
 }
 
-void MainWindow::onToolPicked(ToolId id) { setActiveTool(id); }
+void MainWindow::onToolPicked(ToolId id) {
+  // Transform is modal and needs `enter()` on the tool before it's usable;
+  // route through the menu-equivalent handler so clicking the picker button
+  // behaves like triggering Edit → Free Transform.
+  if (id == ToolId::Transform) {
+    onEditFreeTransform();
+    return;
+  }
+  setActiveTool(id);
+}
 
 void MainWindow::onEditUndo() {
   if (!undoStack_) return;
@@ -907,6 +951,66 @@ void MainWindow::onDeselect() {
       doc_.get(), std::move(before), nullptr, "Deselect"));
   if (canvas_) canvas_->refreshSelectionOverlay();
   statusBar()->showMessage(tr("Deselected"), 1500);
+}
+
+void MainWindow::onEditFreeTransform() {
+  if (!doc_ || !transformTool_) return;
+  if (transformTool_->isActive()) return;  // already transforming
+  if (!transformTool_->enter(*doc_)) {
+    statusBar()->showMessage(
+        tr("Free Transform needs an active pixel layer."), 3000);
+    return;
+  }
+  setActiveTool(ToolId::Transform);
+  if (canvas_) canvas_->requestRecomposite();
+  statusBar()->showMessage(
+      tr("Free Transform — drag to scale/rotate/move, Enter to commit, "
+         "Esc to cancel"),
+      4000);
+}
+
+bool MainWindow::commitTransformIfActive() {
+  if (!transformTool_ || !transformTool_->isActive()) return false;
+  auto p = transformTool_->commit();
+  if (!p) return false;  // identity → nothing to push
+  undoStack_->push(std::make_unique<TransformCommand>(
+      doc_.get(), p->layerId, std::move(p->before), std::move(p->after),
+      p->beforeX, p->beforeY, p->afterX, p->afterY));
+  if (canvas_) canvas_->requestRecomposite();
+  if (layersPanel_) layersPanel_->refresh();
+  return true;
+}
+
+void MainWindow::onTransformAccept() {
+  if (!transformTool_ || !transformTool_->isActive()) return;
+  const bool pushed = commitTransformIfActive();
+  // Drop out of the modal tool regardless — even an identity Enter should
+  // exit Free Transform and return the user to a normal editing tool.
+  if (activeToolId_ == ToolId::Transform) {
+    activeToolId_ = ToolId::Brush;  // avoid setActiveTool's auto-commit path
+    if (canvas_) canvas_->setTool(brushTool_.get());
+    if (canvas_) canvas_->setToolCursor(CanvasView::cursorForTool(ToolId::Brush));
+    if (toolsPanel_) toolsPanel_->setActiveTool(ToolId::Brush);
+    if (canvas_) canvas_->refreshBrushCursor();
+  }
+  if (canvas_) canvas_->requestRecomposite();
+  statusBar()->showMessage(
+      pushed ? tr("Transform applied") : tr("Transform — nothing to apply"),
+      1500);
+}
+
+void MainWindow::onTransformCancel() {
+  if (!transformTool_ || !transformTool_->isActive()) return;
+  transformTool_->cancel();
+  if (activeToolId_ == ToolId::Transform) {
+    activeToolId_ = ToolId::Brush;  // avoid setActiveTool's auto-commit path
+    if (canvas_) canvas_->setTool(brushTool_.get());
+    if (canvas_) canvas_->setToolCursor(CanvasView::cursorForTool(ToolId::Brush));
+    if (toolsPanel_) toolsPanel_->setActiveTool(ToolId::Brush);
+    if (canvas_) canvas_->refreshBrushCursor();
+  }
+  if (canvas_) canvas_->requestRecomposite();
+  statusBar()->showMessage(tr("Transform cancelled"), 1500);
 }
 
 void MainWindow::onSelectInverse() {

@@ -18,6 +18,7 @@ namespace tuxels {
 class Document;
 class SelectionMask;
 class ToolBase;
+class TransformTool;
 
 class CanvasView : public QWidget {
   Q_OBJECT
@@ -27,6 +28,9 @@ class CanvasView : public QWidget {
 
   void setDocument(Document* doc);
   void setTool(ToolBase* tool) noexcept { tool_ = tool; }
+  // Wire the TransformTool so paintEvent can substitute its scratch image
+  // into compose() via LayerOverride and draw the bbox + corner handles.
+  void setTransformTool(TransformTool* t) noexcept { transformTool_ = t; }
   // Set the cursor shown while hovering the canvas with the active tool.
   // Stored so we can re-apply after a transient pan grab ends.
   void setToolCursor(const QCursor& c);
@@ -88,6 +92,7 @@ class CanvasView : public QWidget {
 
   Document* doc_ = nullptr;
   ToolBase* tool_ = nullptr;
+  TransformTool* transformTool_ = nullptr;
   TuxImage composite_;
   QImage cache_;
   bool dirty_ = true;

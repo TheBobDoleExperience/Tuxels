@@ -19,6 +19,7 @@ class MagicWandTool;
 class MarqueeTool;
 class MoveTool;
 class ToolsPanel;
+class TransformTool;
 class UndoStack;
 
 class MainWindow : public QMainWindow {
@@ -57,6 +58,9 @@ class MainWindow : public QMainWindow {
   void onDeselect();
   void onSelectInverse();
   void onToolPicked(ToolId id);
+  void onEditFreeTransform();
+  void onTransformAccept();
+  void onTransformCancel();
 
  private:
   void buildMenus();
@@ -65,6 +69,10 @@ class MainWindow : public QMainWindow {
   void populateSampleDocument();
   void refreshAfterUndoRedo(Rect dirtyRect = {});
   void setActiveTool(ToolId id);
+  // Push the transform tool's current PendingCommit onto the undo stack and
+  // deactivate the tool. No-op if the tool is idle or the transform is an
+  // identity. Returns true iff a command was pushed.
+  bool commitTransformIfActive();
 
   std::unique_ptr<Document> doc_;
   std::unique_ptr<BrushTool> brushTool_;
@@ -73,6 +81,7 @@ class MainWindow : public QMainWindow {
   std::unique_ptr<MagicWandTool> wandTool_;
   std::unique_ptr<CropTool> cropTool_;
   std::unique_ptr<MoveTool> moveTool_;
+  std::unique_ptr<TransformTool> transformTool_;
   std::unique_ptr<UndoStack> undoStack_;
   CanvasView* canvas_ = nullptr;
   LayersPanel* layersPanel_ = nullptr;

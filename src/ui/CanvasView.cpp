@@ -17,6 +17,7 @@
 #include "core/Document.h"
 #include "core/SelectionMask.h"
 #include "tools/ToolBase.h"
+#include "tools/TransformTool.h"
 
 namespace tuxels {
 
@@ -178,6 +179,11 @@ QCursor CanvasView::cursorForTool(ToolId id) {
       return makeCropCursor();
     case ToolId::Move:
       return QCursor(Qt::SizeAllCursor);
+    case ToolId::Transform:
+      // Plain arrow — the bbox + corner dots already communicate grab
+      // points, and the cursor shape changes would need to be region-aware
+      // (which we can add later with hover-test in the paint path).
+      return QCursor(Qt::ArrowCursor);
   }
   return QCursor(Qt::ArrowCursor);
 }
@@ -317,20 +323,32 @@ void CanvasView::recomposite() {
   if (composite_.width() != doc_->width() || composite_.height() != doc_->height()) {
     composite_ = TuxImage(doc_->width(), doc_->height());
   }
-  compose(doc_->tree(), composite_);
+  LayerOverride ov;
+  const LayerOverride* ovp = nullptr;
+  if (transformTool_) {
+    auto o = transformTool_->overlay();
+    if (o.active) { ov = o.layer; ovp = &ov; }
+  }
+  compose(doc_->tree(), composite_, ovp);
   ensureCacheImage(composite_.bounds());
 }
 
 void CanvasView::recompositePartial(Rect pixelRect) {
   if (!doc_ || doc_->width() <= 0 || doc_->height() <= 0) return;
   if (pixelRect.isEmpty()) return;
+  LayerOverride ov;
+  const LayerOverride* ovp = nullptr;
+  if (transformTool_) {
+    auto o = transformTool_->overlay();
+    if (o.active) { ov = o.layer; ovp = &ov; }
+  }
   if (composite_.width() != doc_->width() || composite_.height() != doc_->height()) {
     composite_ = TuxImage(doc_->width(), doc_->height());
-    compose(doc_->tree(), composite_);
+    compose(doc_->tree(), composite_, ovp);
     ensureCacheImage(composite_.bounds());
     return;
   }
-  compose(doc_->tree(), composite_, pixelRect);
+  compose(doc_->tree(), composite_, pixelRect, ovp);
   ensureCacheImage(pixelRect);
 }
 
@@ -539,6 +557,36 @@ void CanvasView::paintEvent(QPaintEvent*) {
         painter.drawEllipse(cursorWidgetPos_, rw, rw);
         painter.setPen(QPen(QColor(255, 255, 255, 220), 1.0));
         painter.drawEllipse(cursorWidgetPos_, rw + 1.0, rw + 1.0);
+      }
+    }
+  }
+
+  // Free Transform overlay: bbox quad + 4 corner handles in widget-space.
+  // Drawn after everything else so the handles stay on top of the preview.
+  if (transformTool_) {
+    auto ov = transformTool_->overlay();
+    if (ov.active) {
+      painter.setRenderHint(QPainter::Antialiasing, true);
+      QPointF c[4];
+      for (int i = 0; i < 4; ++i) {
+        c[i] = canvasToWidget(QPointF(ov.corners[i][0], ov.corners[i][1]));
+      }
+      QPolygonF poly({c[0], c[1], c[2], c[3]});
+      QPen black(QColor(0, 0, 0, 220), 1.0);
+      painter.setBrush(Qt::NoBrush);
+      painter.setPen(black);
+      painter.drawPolygon(poly);
+      QPen white(QColor(255, 255, 255, 240), 1.0);
+      white.setStyle(Qt::DashLine);
+      painter.setPen(white);
+      painter.drawPolygon(poly);
+      // Corner handles: 6×6 filled squares with a 1-px black outline.
+      const qreal hs = 3.0;
+      for (int i = 0; i < 4; ++i) {
+        QRectF h(c[i].x() - hs, c[i].y() - hs, hs * 2.0, hs * 2.0);
+        painter.setPen(QPen(QColor(0, 0, 0, 220), 1.0));
+        painter.setBrush(QColor(255, 255, 255, 240));
+        painter.drawRect(h);
       }
     }
   }

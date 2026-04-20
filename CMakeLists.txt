@@ -38,6 +38,7 @@ set(TUXELS_CORE_SOURCES
   src/tools/MagicWandTool.cpp
   src/tools/MarqueeTool.cpp
   src/tools/MoveTool.cpp
+  src/tools/TransformTool.cpp
 )
 
 add_library(tuxels_core STATIC ${TUXELS_CORE_SOURCES})
@@ -100,6 +101,7 @@ tuxels_add_test(test_place_image)
 tuxels_add_test(test_move_layer)
 tuxels_add_test(test_resample)
 tuxels_add_test(test_transform_command)
+tuxels_add_test(test_transform_tool)
 
 add_executable(test_png_io tests/test_png_io.cpp)
 set_target_properties(test_png_io PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)

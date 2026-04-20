@@ -106,6 +106,7 @@ class ToolsPanel : public QDockWidget {
   QToolButton* pickWandBtn_ = nullptr;
   QToolButton* pickCropBtn_ = nullptr;
   QToolButton* pickMoveBtn_ = nullptr;
+  QToolButton* pickTransformBtn_ = nullptr;
   QWidget* brushGroup_ = nullptr;
   QWidget* marqueeGroup_ = nullptr;
   QWidget* bucketGroup_ = nullptr;

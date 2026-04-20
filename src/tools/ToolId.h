@@ -9,6 +9,7 @@ enum class ToolId {
   MagicWand,
   Crop,
   Move,
+  Transform,
 };
 
 }  // namespace tuxels
