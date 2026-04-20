@@ -1,10 +1,10 @@
 # Tuxels — Current Status
 
-**One-paragraph summary:** Milestone **M0 shipped** as `v0.0.1-m0` on 2026-04-20 (commit `be87b70`). **M1 in progress** — S1 (selection model + brush clipping + Select menu), S2 (rectangular marquee + marching ants + persistent combine mode), S3 (paint bucket + scanline flood), S4 (magic wand + floodSelect), S5 (crop tool + canvas resize), and S6 (`.txl` native file format v1) all landed 2026-04-20. 130 unit tests green (13 new in `test_txl_io`). Plan: `/home/james/.claude/plans/steady-framing-willow.md`.
+**One-paragraph summary:** Milestone **M0 shipped** as `v0.0.1-m0` on 2026-04-20 (commit `be87b70`). **M1 shipped** as `v0.1.0-m1` on 2026-04-20 — S1 (selection + brush clipping + Select menu), S2 (rectangular marquee + marching ants + persistent combine mode), S3 (paint bucket + scanline flood), S4 (magic wand + floodSelect), S5 (crop + canvas resize), S6 (`.txl` native file format v1), and S7 (user verification + post-verify cursor / perf fixes + brand icon set) all landed. 130 unit tests green. Plan: `/home/james/.claude/plans/steady-framing-willow.md`.
 
-## Current Milestone: M1 — Selection, Fill, and Native Format
+## Previous Milestone: M1 — Selection, Fill, and Native Format ✅
 
-**Definition of Done:** rectangular marquee + marching ants, bucket fill, magic wand, crop, `.txl` native file format round-tripping doc + layers + masks + selection. See plan file for detailed DoD.
+**Definition of Done:** rectangular marquee + marching ants, bucket fill, magic wand, crop, `.txl` native file format round-tripping doc + layers + masks + selection. **Shipped 2026-04-20 as tag `v0.1.0-m1`.**
 
 ### M1 Step Progress
 
@@ -16,7 +16,7 @@
 | S4 — Magic wand (smart selection) | ✅ done | 2026-04-20; 104 tests passing (+7 wand/floodSelect); W shortcut; options row (Tolerance + combine-mode buttons); Shift/Alt modifiers + persistent combine mode; uses shared `floodSelect` |
 | S5 — Crop tool + canvas resize | ✅ done | 2026-04-20; 117 tests passing (+13 in `test_crop`); C shortcut; drag-and-release commit; `CropCommand` deep-snapshot undo (per-layer tile clone + mask + selection); cropped selection collapses to null when it doesn't intersect |
 | S6 — `.txl` native file format v1 | ✅ done | 2026-04-20; 130 tests passing (+13 in `test_txl_io`); custom chunked binary, tile-sparse, uncompressed v1; `File → Save As…` writes `.txl`, `File → Open…` dispatches on extension; round-trips dims/layers/masks/selection/active/paint-target |
-| S7 — Verify + tag `v0.1.0-m1` | pending | — |
+| S7 — Verify + tag `v0.1.0-m1` | ✅ done | 2026-04-20; user verified end-to-end; post-verify follow-up: Photoshop-style cursors (Bucket/Wand/Crop pixmaps, Marquee cross, Brush ring); `TileRowCursor` tile-pointer caching in FloodFill + ants overlay walk + composite upload (fixes wand/bucket + undo latency on large images); first-pass app icon set under `assets/icons/` with Qt `.qrc` embed + `.desktop` + Windows `.rc` wiring; tagged `v0.1.0-m1` |
 
 ## Previous Milestone: M0 — Minimal Editor Bootstrap ✅
 
