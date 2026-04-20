@@ -16,6 +16,7 @@ class QWidget;
 namespace tuxels {
 
 class BrushTool;
+class BucketTool;
 
 // Left-side dock: tool picker (Brush / Marquee / …) plus the active tool's
 // parameter controls. Brush: fg/bg swatches + size/hardness/opacity/flow.
@@ -35,6 +36,11 @@ class ToolsPanel : public QDockWidget {
   // behind the panel's back) and update all widgets without triggering
   // edit signals.
   void refreshFromBrush();
+
+  // Attach the live BucketTool. The panel pushes tolerance / opacity /
+  // contiguous changes straight into it; the foreground swatch already
+  // drives the fill color (same source of truth as the brush color).
+  void setBucketTool(BucketTool* tool);
 
   // Reflect the currently-active tool in the picker UI (without emitting
   // toolPicked). Called after MainWindow switches tools via a keyboard
@@ -68,6 +74,8 @@ class ToolsPanel : public QDockWidget {
   void onHardnessChanged(int v);
   void onOpacityChanged(int v);
   void onFlowChanged(int v);
+  void onBucketToleranceChanged(int v);
+  void onBucketOpacityChanged(int v);
 
  private:
   void applyFgToBrush();
@@ -80,12 +88,20 @@ class ToolsPanel : public QDockWidget {
 
   QToolButton* pickBrushBtn_ = nullptr;
   QToolButton* pickMarqueeBtn_ = nullptr;
+  QToolButton* pickBucketBtn_ = nullptr;
   QWidget* brushGroup_ = nullptr;
   QWidget* marqueeGroup_ = nullptr;
+  QWidget* bucketGroup_ = nullptr;
   QToolButton* marqueeReplaceBtn_ = nullptr;
   QToolButton* marqueeAddBtn_ = nullptr;
   QToolButton* marqueeSubtractBtn_ = nullptr;
   QToolButton* marqueeIntersectBtn_ = nullptr;
+
+  BucketTool* bucket_ = nullptr;
+  QSlider* bucketToleranceSlider_ = nullptr;
+  QLabel* bucketToleranceLabel_ = nullptr;
+  QSlider* bucketOpacitySlider_ = nullptr;
+  QLabel* bucketOpacityLabel_ = nullptr;
 
   QFrame* fgSwatch_ = nullptr;
   QFrame* bgSwatch_ = nullptr;

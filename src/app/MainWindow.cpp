@@ -22,6 +22,7 @@
 #include "layers/LayerMask.h"
 #include "layers/PixelLayer.h"
 #include "tools/BrushTool.h"
+#include "tools/BucketTool.h"
 #include "tools/MarqueeTool.h"
 #include "ui/CanvasView.h"
 #include "ui/LayersPanel.h"
@@ -35,6 +36,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   brushTool_ = std::make_unique<BrushTool>();
   marqueeTool_ = std::make_unique<MarqueeTool>();
+  bucketTool_ = std::make_unique<BucketTool>();
   undoStack_ = std::make_unique<UndoStack>(/*maxDepth=*/64);
 
   canvas_ = new CanvasView(this);
@@ -150,12 +152,19 @@ void MainWindow::buildMenus() {
   connect(pickMarquee, &QAction::triggered, this,
           [this]() { setActiveTool(ToolId::Marquee); });
   addAction(pickMarquee);
+
+  auto* pickBucket = new QAction(this);
+  pickBucket->setShortcut(QKeySequence(tr("G")));
+  connect(pickBucket, &QAction::triggered, this,
+          [this]() { setActiveTool(ToolId::Bucket); });
+  addAction(pickBucket);
 }
 
 void MainWindow::buildDocks() {
   toolsPanel_ = new ToolsPanel(this);
   addDockWidget(Qt::LeftDockWidgetArea, toolsPanel_);
   toolsPanel_->setBrushTool(brushTool_.get());
+  toolsPanel_->setBucketTool(bucketTool_.get());
   toolsPanel_->setActiveTool(activeToolId_);
   connect(toolsPanel_, &ToolsPanel::toolPicked, this,
           &MainWindow::onToolPicked);
@@ -446,6 +455,16 @@ void MainWindow::onLayerPainted() {
       undoStack_->push(std::move(cmd));
     }
   }
+  // Bucket fill commit. A press-only tool, same tile-COW undo pathway.
+  if (bucketTool_) {
+    auto fill = bucketTool_->takeLastFill();
+    if (fill.layer && fill.target) {
+      auto cmd = std::make_unique<PaintCommand>(
+          fill.target, std::move(fill.recorded.before),
+          std::move(fill.recorded.after), "Paint Bucket");
+      undoStack_->push(std::move(cmd));
+    }
+  }
   // Marquee commit. Push a SelectionCommand and refresh the ants overlay.
   if (marqueeTool_) {
     if (auto commit = marqueeTool_->takeCommit()) {
@@ -468,6 +487,9 @@ void MainWindow::setActiveTool(ToolId id) {
       break;
     case ToolId::Marquee:
       if (canvas_) canvas_->setTool(marqueeTool_.get());
+      break;
+    case ToolId::Bucket:
+      if (canvas_) canvas_->setTool(bucketTool_.get());
       break;
   }
   if (toolsPanel_) toolsPanel_->setActiveTool(id);

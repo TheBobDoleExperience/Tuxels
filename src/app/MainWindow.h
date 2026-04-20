@@ -10,6 +10,7 @@
 namespace tuxels {
 
 class BrushTool;
+class BucketTool;
 class CanvasView;
 class LayerBase;
 class LayersPanel;
@@ -63,6 +64,7 @@ class MainWindow : public QMainWindow {
   std::unique_ptr<Document> doc_;
   std::unique_ptr<BrushTool> brushTool_;
   std::unique_ptr<MarqueeTool> marqueeTool_;
+  std::unique_ptr<BucketTool> bucketTool_;
   std::unique_ptr<UndoStack> undoStack_;
   CanvasView* canvas_ = nullptr;
   LayersPanel* layersPanel_ = nullptr;

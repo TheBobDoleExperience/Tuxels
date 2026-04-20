@@ -17,6 +17,7 @@
 
 #include "brush/RoundBrush.h"
 #include "tools/BrushTool.h"
+#include "tools/BucketTool.h"
 
 namespace tuxels {
 
@@ -92,8 +93,17 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
   connect(pickMarqueeBtn_, &QToolButton::clicked, this,
           [this]() { emit toolPicked(ToolId::Marquee); });
 
+  pickBucketBtn_ = new QToolButton(pickerRow);
+  pickBucketBtn_->setText("G");
+  pickBucketBtn_->setToolTip(tr("Paint Bucket  (G)"));
+  pickBucketBtn_->setCheckable(true);
+  pickerGroup->addButton(pickBucketBtn_);
+  connect(pickBucketBtn_, &QToolButton::clicked, this,
+          [this]() { emit toolPicked(ToolId::Bucket); });
+
   pickerLayout->addWidget(pickBrushBtn_);
   pickerLayout->addWidget(pickMarqueeBtn_);
+  pickerLayout->addWidget(pickBucketBtn_);
   pickerLayout->addStretch(1);
   vbox->addWidget(pickerRow);
 
@@ -142,6 +152,54 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
   marqueeVbox->addWidget(modeRow);
   marqueeGroup_->setVisible(false);
   vbox->addWidget(marqueeGroup_);
+
+  // -- Bucket options (visible only when Bucket is active) ----------------
+  bucketGroup_ = new QWidget(root);
+  auto* bucketVbox = new QVBoxLayout(bucketGroup_);
+  bucketVbox->setContentsMargins(0, 0, 0, 0);
+  bucketVbox->setSpacing(4);
+  auto* bucketHeader = new QLabel(tr("<b>Bucket</b>"), bucketGroup_);
+  bucketVbox->addWidget(bucketHeader);
+  auto* bucketForm = new QFormLayout();
+  bucketForm->setContentsMargins(0, 0, 0, 0);
+  bucketForm->setSpacing(4);
+
+  auto makeIntRow = [&](QSlider*& slider, QLabel*& label, int rangeMax,
+                         const QString& suffix) {
+    auto* row = new QWidget(bucketGroup_);
+    auto* layout = new QHBoxLayout(row);
+    layout->setContentsMargins(0, 0, 0, 0);
+    slider = new QSlider(Qt::Horizontal, row);
+    slider->setRange(0, rangeMax);
+    slider->setSingleStep(1);
+    label = new QLabel(QStringLiteral("0%1").arg(suffix), row);
+    label->setFixedWidth(42);
+    label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    layout->addWidget(slider, 1);
+    layout->addWidget(label);
+    return row;
+  };
+
+  // Tolerance: 0–255 matches Photoshop's UI range; we divide by 255 before
+  // handing to the flood fill (normalized float distance).
+  auto* tolRow = makeIntRow(bucketToleranceSlider_, bucketToleranceLabel_,
+                            255, "");
+  bucketToleranceLabel_->setText("0");
+  connect(bucketToleranceSlider_, &QSlider::valueChanged, this,
+          &ToolsPanel::onBucketToleranceChanged);
+  bucketForm->addRow(tr("Tolerance"), tolRow);
+
+  auto* fillOpRow =
+      makeIntRow(bucketOpacitySlider_, bucketOpacityLabel_, 100, "%");
+  bucketOpacitySlider_->setValue(100);
+  bucketOpacityLabel_->setText("100%");
+  connect(bucketOpacitySlider_, &QSlider::valueChanged, this,
+          &ToolsPanel::onBucketOpacityChanged);
+  bucketForm->addRow(tr("Opacity"), fillOpRow);
+
+  bucketVbox->addLayout(bucketForm);
+  bucketGroup_->setVisible(false);
+  vbox->addWidget(bucketGroup_);
 
   // -- Brush group (hidden when non-brush tools are active) ---------------
   brushGroup_ = new QWidget(root);
@@ -250,8 +308,10 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
 void ToolsPanel::setActiveTool(ToolId id) {
   if (pickBrushBtn_) pickBrushBtn_->setChecked(id == ToolId::Brush);
   if (pickMarqueeBtn_) pickMarqueeBtn_->setChecked(id == ToolId::Marquee);
+  if (pickBucketBtn_) pickBucketBtn_->setChecked(id == ToolId::Bucket);
   if (brushGroup_) brushGroup_->setVisible(id == ToolId::Brush);
   if (marqueeGroup_) marqueeGroup_->setVisible(id == ToolId::Marquee);
+  if (bucketGroup_) bucketGroup_->setVisible(id == ToolId::Bucket);
 }
 
 void ToolsPanel::setMarqueeMode(SelectionMode m) {
@@ -265,6 +325,21 @@ void ToolsPanel::setMarqueeMode(SelectionMode m) {
 void ToolsPanel::setBrushTool(BrushTool* tool) {
   brush_ = tool;
   refreshFromBrush();
+  applyFgToBrush();
+}
+
+void ToolsPanel::setBucketTool(BucketTool* tool) {
+  bucket_ = tool;
+  if (!bucket_) return;
+  // Push current slider values into the tool so it starts in the state the
+  // UI claims (0 tolerance, 100% opacity by default).
+  onBucketToleranceChanged(bucketToleranceSlider_
+                               ? bucketToleranceSlider_->value()
+                               : 0);
+  onBucketOpacityChanged(bucketOpacitySlider_
+                             ? bucketOpacitySlider_->value()
+                             : 100);
+  // Seed the fill color from the current fg swatch.
   applyFgToBrush();
 }
 
@@ -346,13 +421,24 @@ void ToolsPanel::onFlowChanged(int v) {
 }
 
 void ToolsPanel::applyFgToBrush() {
-  if (!brush_) return;
   Rgba32F c;
   c.r = static_cast<float>(fg_.redF());
   c.g = static_cast<float>(fg_.greenF());
   c.b = static_cast<float>(fg_.blueF());
   c.a = static_cast<float>(fg_.alphaF());
-  brush_->brush().setColor(c);
+  if (brush_) brush_->brush().setColor(c);
+  if (bucket_) bucket_->setColor(c);
+}
+
+void ToolsPanel::onBucketToleranceChanged(int v) {
+  if (bucketToleranceLabel_) bucketToleranceLabel_->setText(QString::number(v));
+  if (bucket_) bucket_->setTolerance(v / 255.f);
+}
+
+void ToolsPanel::onBucketOpacityChanged(int v) {
+  if (bucketOpacityLabel_)
+    bucketOpacityLabel_->setText(QStringLiteral("%1%").arg(v));
+  if (bucket_) bucket_->setOpacity(v / 100.f);
 }
 
 void ToolsPanel::updateSwatchColors() {
