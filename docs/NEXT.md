@@ -4,56 +4,62 @@
 
 ## Immediately Next
 
-**M2-S7 — Verify + tag `v0.2.0-m2`.** S0–S6 all landed 2026-04-20. What's
-left is a user-facing walkthrough on the live binary + the final git tag.
+**Tag `v0.2.0-m2`.** S0–S6 shipped 2026-04-20; S7 user walkthrough passed
+2026-04-21 with one regression caught and fixed (commit `4492355`): the
+Free Transform Enter path was pushing a `TransformCommand` onto the undo
+stack without first applying it. Because Transform's preview is an
+overlay (`LayerOverride`), the real layer was untouched — so committing
+popped the overlay and compose rendered the original pixels.
+`UndoStack::push`'s contract is explicit: "Push a command whose side-
+effect has already been applied." The fix calls `cmd->apply()` before
+`undoStack_->push(...)` and added `transform_pending_commit_writes_through_apply`
+as a regression test walking the full `tool.commit() → Command →
+apply() → assert state` path.
 
-The DoD walkthrough (plan §S7):
+Tag the milestone when the user gives the green light:
 
-1. Open a fresh doc (or load an existing `.txl`), then `File → Place…`
-   (Ctrl+Shift+P) an oversized PNG — verify it centers in the doc and
-   keeps its offscreen pixels (they become visible after a Move).
-2. Switch to Move (V), drag the placed layer. Confirm the live repaint
-   stays snappy (partial-recomposite only the union of old+new doc
-   footprint). Undo/redo should swap origins cleanly.
-3. Switch to Free Transform (Ctrl+T). Drag corners to scale, inside the
-   quad to translate, outside to rotate. Confirm preview is bilinear /
-   premultiplied (no rotation halos). Enter commits, Escape cancels,
-   tool-switch auto-commits. Undo restores the pre-transform image +
-   origin.
-4. Lasso (L): freehand drag to make a feathered-boundary selection.
-   Polygonal Lasso (P): click vertices, close on near-start click or
-   Enter. Verify Shift / Alt / Shift+Alt combine modes at press-time
-   win over the persistent options row, and that the options row is the
-   hijack-proof fallback on GNOME (Alt-drag goes to the WM).
-5. Magic Wand (W) + Select By Color (Shift+W cycles). Click on a color
-   region, verify contiguous vs non-contiguous behavior differs, the
-   tolerance slider is shared (same 0–255 slider drives both), and the
-   combine-mode buttons apply to both.
-6. Brush (B): paint with Size Jitter / Opacity Jitter / Spacing sliders
-   at non-zero values. Confirm strokes look organic (per-stamp variance)
-   and that dropping jitter to 0 restores mechanical Photoshop-like
-   output.
-7. `File → Save As…` as `.txl`, close the doc, re-open — confirm layer
-   origins, selection, active layer, and paint target all round-trip.
-8. Tag: `git tag -a v0.2.0-m2 -m "M2 — Position, Shape, Stroke Quality"`
-   once the user signs off.
+```
+git tag -a v0.2.0-m2 -m "M2 — Position, Shape, Stroke Quality"
+git push origin v0.2.0-m2
+```
 
-Final test gate: `cmake --build build && ctest --test-dir build` green
-(20 executables, 214 cases); no new warnings; `QT_QPA_PLATFORM=offscreen
-timeout 2 ./build/tuxels` clean boot.
+Then move to M3 kickoff.
 
-After S7: milestone M2 shipped. Next milestone kickoff discussion
-(Adjustments — Levels/Curves — was deferred to M3 at the M2 kickoff).
+## After the tag — M3 kickoff discussion
+
+Adjustments (Levels / Curves) were deferred from the M2 kickoff because
+they don't share a natural scope boundary with the manipulation tools.
+They're the working headliner for **M3 — Adjustments & Non-destructive
+Edits**, but before writing a plan, reach alignment with the user on:
+
+- **Scope boundary:** Levels + Curves first, or a wider "Image → Adjust"
+  family (Hue/Saturation, Brightness/Contrast, Color Balance, Threshold)?
+- **Non-destructive route:** do adjustments land as full **adjustment
+  layers** in M3 (Photoshop parity; requires clip-to-layer semantics and
+  a `LUT` / `Curve` serialization path through `.txl`), or as modal
+  **destructive commits** first with adjustment layers deferred to M4?
+- **Histogram UI:** in-dialog preview + live histogram is Photoshop's
+  bar for Levels/Curves; needs a tile-aware histogram scan. Is this a
+  blocker or a "nice to have"?
+- **Related manipulation polish likely belonging here:** Shift
+  aspect-lock + 15° rotation snap in Free Transform (deferred from S3),
+  movable transform pivot (deferred), tablet pressure wiring for the
+  already-existing `RoundBrushParams::pressureMultiplier`.
+
+Once the user picks a scope, drop into plan mode and write the
+authoritative plan at `/home/james/.claude/plans/<name>.md` the same way
+M0/M1/M2 were scoped.
 
 ## Cold-Start Checklist
 
-1. `cat docs/STATUS.md` — current state.
+1. `cat docs/STATUS.md` — current state (M2 user-verified, tag pending).
 2. This file — what to do next.
 3. `cat docs/ARCHITECTURE.md` — don't re-derive decisions.
 4. `cat /home/james/.claude/plans/cryptic-stargazing-moonbeam.md` — M2
-   plan (authoritative).
-5. `git log --oneline -10` — recent commits.
-6. `cmake --build build && ctest --test-dir build` — confirm green
-   tree (expect 214 passing test cases — 20 ctest executables — as of
-   M2-S6 ship).
-7. Pick up "Immediately Next" above.
+   plan (archive — S0–S6 done, S7 user-verified).
+5. `git log --oneline -20` — recent commits (look for `4492355` transform
+   apply-before-push fix).
+6. `cmake --build build && ctest --test-dir build` — confirm green tree
+   (215 passing cases across 20 executables as of the S7 regression fix).
+7. If user wants the tag: `git tag -a v0.2.0-m2 -m "..."` + push.
+   Otherwise pick up "After the tag — M3 kickoff discussion" above.
