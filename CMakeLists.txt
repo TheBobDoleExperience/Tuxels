@@ -29,6 +29,7 @@ set(TUXELS_CORE_SOURCES
   src/fill/FloodFill.cpp
   src/tools/BrushTool.cpp
   src/tools/BucketTool.cpp
+  src/tools/MagicWandTool.cpp
   src/tools/MarqueeTool.cpp
 )
 

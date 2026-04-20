@@ -1,6 +1,6 @@
 # Tuxels — Current Status
 
-**One-paragraph summary:** Milestone **M0 shipped** as `v0.0.1-m0` on 2026-04-20 (commit `be87b70`). **M1 in progress** — S1 (selection model + brush clipping + Select menu), S2 (rectangular marquee tool + marching-ants overlay + tool picker + persistent combine-mode options row), and S3 (paint bucket + scanline flood fill + tolerance/opacity options) all landed 2026-04-20. 97 unit tests green (11 new in `test_fill`). Plan: `/home/james/.claude/plans/steady-framing-willow.md`.
+**One-paragraph summary:** Milestone **M0 shipped** as `v0.0.1-m0` on 2026-04-20 (commit `be87b70`). **M1 in progress** — S1 (selection model + brush clipping + Select menu), S2 (rectangular marquee + marching ants + persistent combine mode), S3 (paint bucket + scanline flood), and S4 (magic wand + floodSelect) all landed 2026-04-20. 104 unit tests green (7 new in `test_fill` for wand + floodSelect). Plan: `/home/james/.claude/plans/steady-framing-willow.md`.
 
 ## Current Milestone: M1 — Selection, Fill, and Native Format
 
@@ -13,7 +13,7 @@
 | S1 — SelectionMask + brush clipping + Select menu | ✅ done | 2026-04-20; 75 tests passing (13 new in `test_selection`) |
 | S2 — Rectangular marquee + marching ants | ✅ done | 2026-04-20; 86 tests passing (+9 marquee mode/edge cases, +2 persistent-mode); tool picker + B/M shortcuts; persistent combine mode buttons (New/+/−/∩) as WM-hijack-proof alternative to Alt modifier |
 | S3 — Bucket fill + scanline flood | ✅ done | 2026-04-20; 97 tests passing (+11 in `test_fill`); G shortcut + options row (Tolerance 0–255, Opacity 0–100%); respects selection and paint target; PaintCommand undo |
-| S4 — Magic wand (smart selection) | pending | — |
+| S4 — Magic wand (smart selection) | ✅ done | 2026-04-20; 104 tests passing (+7 wand/floodSelect); W shortcut; options row (Tolerance + combine-mode buttons); Shift/Alt modifiers + persistent combine mode; uses shared `floodSelect` |
 | S5 — Crop tool + canvas resize | pending | — |
 | S6 — `.txl` native file format v1 | pending | — |
 | S7 — Verify + tag `v0.1.0-m1` | pending | — |
@@ -55,6 +55,7 @@
 - **Marquee + ants** (M1-S2): ToolsPanel has a picker row with Brush (B) / Marquee (M) buttons. With the Marquee tool active, drag on the canvas builds a rectangular selection; modifiers at press time pick the combine mode — plain = Replace, Shift = Add, Alt = Subtract, Shift+Alt = Intersect. Live rubber-band dashed rect tracks the drag; on release a `SelectionCommand` commits the before/after pair (so the marquee is undoable). A 10 Hz `QTimer` animates the marching-ants overlay (black solid under white dashed, `dashOffset` rotates) around the selection boundary; only the selection's widget-space bbox repaints per tick. The Shift-for-pan gesture is suppressed when the Marquee is active, so Shift+Left adds to the selection instead of panning.
 - **Marquee persistent mode** (M1-S2 follow-up): ToolsPanel reveals a Marquee options row with four combine-mode buttons (New / + / − / ∩) when the Marquee tool is active. The selected button drives the combine mode for drags with no modifier keys held at press time; holding Shift / Alt / Shift+Alt still temporarily overrides per Photoshop. This keeps Subtract and Intersect reachable on Linux WMs (GNOME default) that consume Alt-drag for window-move before Qt receives the event.
 - **Paint bucket** (M1-S3): ToolsPanel picker row gains a Bucket (G) button; G shortcut switches tools. When the Bucket tool is active, a press on the canvas runs a 4-connected scanline flood fill at that pixel on the active paint target (layer or mask), comparing against the seed's source color with an L∞ tolerance threshold (UI slider 0–255, normalized to [0,1]). Fill is soft-masked by the selection (binary threshold for traversal; per-pixel multiply on the fill alpha for feathered edges) so bucket-inside-selection just works. A Bucket options row (Tolerance / Opacity) appears when the tool is active. The foreground swatch is the shared source of truth for both brush color and fill color. Fill tile-COW snapshots are wrapped in a `PaintCommand`, so each click is one undo step. Non-contiguous (same-color-anywhere) fills are deferred.
+- **Magic wand** (M1-S4): picker row gains a Wand (W) button; W shortcut switches tools. A click on the canvas samples the active PixelLayer's pixel color, runs a scanline flood (`floodSelect` in `fill/FloodFill`) with L∞ tolerance, and commits a `SelectionCommand` carrying the combined before/after selection. Combine-mode semantics match the marquee (Replace/Add/Subtract/Intersect — modifiers win when held, persistent-mode buttons cover WM Alt-hijack). Subtract/Intersect further clip the wand traversal to the existing selection so the wand can never escape it. Shift-click on the canvas routes to the wand (not the pan gesture) because `consumesShiftClick()` returns true.
 
 ## What Is Broken / Known Issues
 

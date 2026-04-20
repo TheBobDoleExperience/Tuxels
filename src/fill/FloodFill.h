@@ -45,4 +45,18 @@ FloodFillResult floodFill(TuxImage& target, int seedX, int seedY,
                           const FloodFillOptions& opts,
                           const SelectionMask* selection);
 
+// Wand-style selection: runs the same 4-connected scanline flood as
+// floodFill, but writes the resulting connected region into a fresh
+// SelectionMask (R = 1 inside the flooded area, 0 elsewhere) instead of
+// blending a color. `source` is read-only; the seed color is sampled from
+// it once. Tolerance uses the same L∞ metric over RGB. If `clip` is
+// non-null, traversal is gated to pixels with `clip->sample(x,y) > 0` —
+// this is how Shift/Alt/Intersect wand gestures in a pre-existing
+// selection keep the wand inside the active region. Returns nullptr if
+// the seed is out of bounds or outside the clip.
+std::unique_ptr<SelectionMask> floodSelect(const TuxImage& source,
+                                           int seedX, int seedY,
+                                           float tolerance,
+                                           const SelectionMask* clip);
+
 }  // namespace tuxels

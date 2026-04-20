@@ -17,6 +17,7 @@ namespace tuxels {
 
 class BrushTool;
 class BucketTool;
+class MagicWandTool;
 
 // Left-side dock: tool picker (Brush / Marquee / …) plus the active tool's
 // parameter controls. Brush: fg/bg swatches + size/hardness/opacity/flow.
@@ -42,6 +43,11 @@ class ToolsPanel : public QDockWidget {
   // drives the fill color (same source of truth as the brush color).
   void setBucketTool(BucketTool* tool);
 
+  // Attach the live MagicWandTool. The panel pushes tolerance and combine
+  // mode into it; the tool's own pending commit is consumed by MainWindow
+  // on press.
+  void setMagicWandTool(MagicWandTool* tool);
+
   // Reflect the currently-active tool in the picker UI (without emitting
   // toolPicked). Called after MainWindow switches tools via a keyboard
   // shortcut so the button state stays in sync.
@@ -51,6 +57,9 @@ class ToolsPanel : public QDockWidget {
   // (without emitting marqueeModeChanged). Used when the mode is driven
   // from outside the panel (e.g., future keyboard shortcuts).
   void setMarqueeMode(SelectionMode m);
+
+  // Reflect the magic wand's persistent combine mode in its options row.
+  void setWandMode(SelectionMode m);
 
  signals:
   // Fired when the user clicks a picker button. MainWindow wires this to
@@ -62,6 +71,10 @@ class ToolsPanel : public QDockWidget {
   // Subtract/Intersect stay reachable on WMs that grab Alt-drag for
   // window-move.
   void marqueeModeChanged(SelectionMode m);
+
+  // Same idea for the magic wand — Subtract/Intersect stay reachable
+  // without Alt.
+  void wandModeChanged(SelectionMode m);
 
  public slots:
   void swapColors();
@@ -76,6 +89,7 @@ class ToolsPanel : public QDockWidget {
   void onFlowChanged(int v);
   void onBucketToleranceChanged(int v);
   void onBucketOpacityChanged(int v);
+  void onWandToleranceChanged(int v);
 
  private:
   void applyFgToBrush();
@@ -89,19 +103,29 @@ class ToolsPanel : public QDockWidget {
   QToolButton* pickBrushBtn_ = nullptr;
   QToolButton* pickMarqueeBtn_ = nullptr;
   QToolButton* pickBucketBtn_ = nullptr;
+  QToolButton* pickWandBtn_ = nullptr;
   QWidget* brushGroup_ = nullptr;
   QWidget* marqueeGroup_ = nullptr;
   QWidget* bucketGroup_ = nullptr;
+  QWidget* wandGroup_ = nullptr;
   QToolButton* marqueeReplaceBtn_ = nullptr;
   QToolButton* marqueeAddBtn_ = nullptr;
   QToolButton* marqueeSubtractBtn_ = nullptr;
   QToolButton* marqueeIntersectBtn_ = nullptr;
+  QToolButton* wandReplaceBtn_ = nullptr;
+  QToolButton* wandAddBtn_ = nullptr;
+  QToolButton* wandSubtractBtn_ = nullptr;
+  QToolButton* wandIntersectBtn_ = nullptr;
 
   BucketTool* bucket_ = nullptr;
   QSlider* bucketToleranceSlider_ = nullptr;
   QLabel* bucketToleranceLabel_ = nullptr;
   QSlider* bucketOpacitySlider_ = nullptr;
   QLabel* bucketOpacityLabel_ = nullptr;
+
+  MagicWandTool* wand_ = nullptr;
+  QSlider* wandToleranceSlider_ = nullptr;
+  QLabel* wandToleranceLabel_ = nullptr;
 
   QFrame* fgSwatch_ = nullptr;
   QFrame* bgSwatch_ = nullptr;

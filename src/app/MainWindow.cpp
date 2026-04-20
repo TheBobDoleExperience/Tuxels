@@ -23,6 +23,7 @@
 #include "layers/PixelLayer.h"
 #include "tools/BrushTool.h"
 #include "tools/BucketTool.h"
+#include "tools/MagicWandTool.h"
 #include "tools/MarqueeTool.h"
 #include "ui/CanvasView.h"
 #include "ui/LayersPanel.h"
@@ -37,6 +38,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   brushTool_ = std::make_unique<BrushTool>();
   marqueeTool_ = std::make_unique<MarqueeTool>();
   bucketTool_ = std::make_unique<BucketTool>();
+  wandTool_ = std::make_unique<MagicWandTool>();
   undoStack_ = std::make_unique<UndoStack>(/*maxDepth=*/64);
 
   canvas_ = new CanvasView(this);
@@ -158,6 +160,12 @@ void MainWindow::buildMenus() {
   connect(pickBucket, &QAction::triggered, this,
           [this]() { setActiveTool(ToolId::Bucket); });
   addAction(pickBucket);
+
+  auto* pickWand = new QAction(this);
+  pickWand->setShortcut(QKeySequence(tr("W")));
+  connect(pickWand, &QAction::triggered, this,
+          [this]() { setActiveTool(ToolId::MagicWand); });
+  addAction(pickWand);
 }
 
 void MainWindow::buildDocks() {
@@ -165,6 +173,7 @@ void MainWindow::buildDocks() {
   addDockWidget(Qt::LeftDockWidgetArea, toolsPanel_);
   toolsPanel_->setBrushTool(brushTool_.get());
   toolsPanel_->setBucketTool(bucketTool_.get());
+  toolsPanel_->setMagicWandTool(wandTool_.get());
   toolsPanel_->setActiveTool(activeToolId_);
   connect(toolsPanel_, &ToolsPanel::toolPicked, this,
           &MainWindow::onToolPicked);
@@ -172,7 +181,12 @@ void MainWindow::buildDocks() {
           [this](SelectionMode m) {
             if (marqueeTool_) marqueeTool_->setMode(m);
           });
+  connect(toolsPanel_, &ToolsPanel::wandModeChanged, this,
+          [this](SelectionMode m) {
+            if (wandTool_) wandTool_->setMode(m);
+          });
   if (marqueeTool_) toolsPanel_->setMarqueeMode(marqueeTool_->mode());
+  if (wandTool_) toolsPanel_->setWandMode(wandTool_->mode());
 
   layersPanel_ = new LayersPanel(this);
   addDockWidget(Qt::RightDockWidgetArea, layersPanel_);
@@ -475,6 +489,16 @@ void MainWindow::onLayerPainted() {
       if (canvas_) canvas_->refreshSelectionOverlay();
     }
   }
+  // Magic wand commit — same selection-command plumbing as marquee.
+  if (wandTool_) {
+    if (auto commit = wandTool_->takeCommit()) {
+      doc_->setSelection(commit->after ? commit->after->clone() : nullptr);
+      undoStack_->push(std::make_unique<SelectionCommand>(
+          doc_.get(), std::move(commit->before), std::move(commit->after),
+          commit->label));
+      if (canvas_) canvas_->refreshSelectionOverlay();
+    }
+  }
   if (layersPanel_) layersPanel_->refresh();
 }
 
@@ -490,6 +514,9 @@ void MainWindow::setActiveTool(ToolId id) {
       break;
     case ToolId::Bucket:
       if (canvas_) canvas_->setTool(bucketTool_.get());
+      break;
+    case ToolId::MagicWand:
+      if (canvas_) canvas_->setTool(wandTool_.get());
       break;
   }
   if (toolsPanel_) toolsPanel_->setActiveTool(id);

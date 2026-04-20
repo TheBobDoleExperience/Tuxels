@@ -14,6 +14,7 @@ class BucketTool;
 class CanvasView;
 class LayerBase;
 class LayersPanel;
+class MagicWandTool;
 class MarqueeTool;
 class ToolsPanel;
 class UndoStack;
@@ -65,6 +66,7 @@ class MainWindow : public QMainWindow {
   std::unique_ptr<BrushTool> brushTool_;
   std::unique_ptr<MarqueeTool> marqueeTool_;
   std::unique_ptr<BucketTool> bucketTool_;
+  std::unique_ptr<MagicWandTool> wandTool_;
   std::unique_ptr<UndoStack> undoStack_;
   CanvasView* canvas_ = nullptr;
   LayersPanel* layersPanel_ = nullptr;

@@ -180,6 +180,15 @@ Exclusion:    C = Cs + Cd - 2*Cs*Cd
 - ToolsPanel: picker row grew a Bucket (G) button; a new bucket options group (Tolerance 0–255, Opacity 0–100%) is visible only when the Bucket tool is active. The foreground swatch is the single source of truth for both brush color and fill color — `applyFgToBrush()` pushes into both `brush_` and `bucket_`. MainWindow owns the `std::unique_ptr<BucketTool>` alongside the brush and marquee; `setActiveTool(ToolId::Bucket)` swaps the canvas tool pointer; `onLayerPainted()` drains `bucketTool_->takeLastFill()` and pushes a "Paint Bucket" PaintCommand.
 - Known deferred work: non-contiguous fill (same-color-anywhere) is modeled as an opt field (`FloodFillOptions::contiguous`) but only the `true` branch is implemented. Fill blend modes beyond src-over are Phase 2 work.
 
+### Magic wand (M1-S4)
+
+- `fill/FloodFill` gained a sibling of `floodFill`: `floodSelect(source, seedX, seedY, tolerance, clip)` runs the same 4-connected scanline algorithm but writes the flooded region into a fresh `SelectionMask` instead of blending a color into a `TuxImage`. Same run-compression trick, same L∞-over-RGB tolerance metric, same visited bitmap. The `clip` parameter gates traversal to pixels inside an existing selection — used by Subtract/Intersect wand gestures so the wand can never leak past the current selection boundary.
+- Runs collapse to `mask->fillRect({xL, y, xR-xL+1, 1}, 1.f)` so the result rides the SelectionMask's tile-sparse storage path: a large connected region in a 4k canvas only allocates the touched tiles. Returns `nullptr` when nothing matched (seed out of bounds / outside the clip / colors mismatch with tolerance=0) so callers can short-circuit.
+- `tools/MagicWandTool` is a `ToolBase` subclass. Press samples the active PixelLayer's image at `(x, y)`, runs `floodSelect`, derives the combine mode from either the press-time modifiers (Shift/Alt/Shift+Alt) or the persistent mode (options row), and packages a `PendingCommit{before, after, label}` for MainWindow to convert into a `SelectionCommand` on the next `layerPainted` signal. Drag/release are no-ops; the gesture is a single click. `consumesShiftClick()` returns true so Shift+Left routes to the wand (add to selection) instead of the canvas's shift-pan gesture.
+- Intersect/Subtract pass `doc.selection()` as the wand's traversal clip. Replace/Add pass `nullptr` so the wand can pick up pixels outside any pre-existing selection.
+- Empty-result discipline: if `floodSelect` returns `nullptr` and the mode is Replace with an existing selection, the commit collapses to a Deselect. Any non-empty combined result that ends up all-zero (e.g. Subtract-all) is collapsed to `nullptr` via `SelectionMask::isEmpty()` so the brush's null-selection fast path stays correct.
+- ToolsPanel: picker gains W; a new Magic Wand options group (same 4 combine-mode buttons as the Marquee group, plus a Tolerance slider) is visible only when Wand is active. `wandModeChanged(SelectionMode)` signal wires to `MagicWandTool::setMode`; this is the same hijack-proof pattern used for the marquee.
+
 ---
 
 ## Deviations from SCOPE.md (intentional, M0-only)

@@ -18,6 +18,7 @@
 #include "brush/RoundBrush.h"
 #include "tools/BrushTool.h"
 #include "tools/BucketTool.h"
+#include "tools/MagicWandTool.h"
 
 namespace tuxels {
 
@@ -101,9 +102,18 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
   connect(pickBucketBtn_, &QToolButton::clicked, this,
           [this]() { emit toolPicked(ToolId::Bucket); });
 
+  pickWandBtn_ = new QToolButton(pickerRow);
+  pickWandBtn_->setText("W");
+  pickWandBtn_->setToolTip(tr("Magic Wand  (W)"));
+  pickWandBtn_->setCheckable(true);
+  pickerGroup->addButton(pickWandBtn_);
+  connect(pickWandBtn_, &QToolButton::clicked, this,
+          [this]() { emit toolPicked(ToolId::MagicWand); });
+
   pickerLayout->addWidget(pickBrushBtn_);
   pickerLayout->addWidget(pickMarqueeBtn_);
   pickerLayout->addWidget(pickBucketBtn_);
+  pickerLayout->addWidget(pickWandBtn_);
   pickerLayout->addStretch(1);
   vbox->addWidget(pickerRow);
 
@@ -200,6 +210,72 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
   bucketVbox->addLayout(bucketForm);
   bucketGroup_->setVisible(false);
   vbox->addWidget(bucketGroup_);
+
+  // -- Magic wand options (visible only when Wand is active) -------------
+  wandGroup_ = new QWidget(root);
+  auto* wandVbox = new QVBoxLayout(wandGroup_);
+  wandVbox->setContentsMargins(0, 0, 0, 0);
+  wandVbox->setSpacing(4);
+  auto* wandHeader = new QLabel(tr("<b>Magic Wand</b>"), wandGroup_);
+  wandVbox->addWidget(wandHeader);
+
+  // Combine-mode row — same four buttons as the Marquee options row, kept
+  // separate so each tool carries its own persistent mode. Alt-based
+  // modifiers may still be hijacked by the WM; these buttons are the
+  // hijack-proof path.
+  auto* wandModeRow = new QWidget(wandGroup_);
+  auto* wandModeLayout = new QHBoxLayout(wandModeRow);
+  wandModeLayout->setContentsMargins(0, 0, 0, 0);
+  wandModeLayout->setSpacing(4);
+  auto* wandModeGroup = new QButtonGroup(this);
+  wandModeGroup->setExclusive(true);
+  auto makeWandModeBtn = [&](const QString& text, const QString& tip,
+                              SelectionMode m, bool checked) {
+    auto* b = new QToolButton(wandModeRow);
+    b->setText(text);
+    b->setToolTip(tip);
+    b->setCheckable(true);
+    b->setChecked(checked);
+    wandModeGroup->addButton(b);
+    wandModeLayout->addWidget(b);
+    connect(b, &QToolButton::clicked, this,
+            [this, m]() { emit wandModeChanged(m); });
+    return b;
+  };
+  wandReplaceBtn_ = makeWandModeBtn(
+      "New", tr("Replace selection  (no modifier)"), SelectionMode::Replace,
+      true);
+  wandAddBtn_ = makeWandModeBtn(
+      "+", tr("Add to selection  (Shift)"), SelectionMode::Add, false);
+  wandSubtractBtn_ = makeWandModeBtn(
+      "−", tr("Subtract from selection  (Alt)"), SelectionMode::Subtract,
+      false);
+  wandIntersectBtn_ = makeWandModeBtn(
+      "∩", tr("Intersect with selection  (Shift+Alt)"),
+      SelectionMode::Intersect, false);
+  wandModeLayout->addStretch(1);
+  wandVbox->addWidget(wandModeRow);
+
+  auto* wandForm = new QFormLayout();
+  wandForm->setContentsMargins(0, 0, 0, 0);
+  wandForm->setSpacing(4);
+  auto* wandTolRow = new QWidget(wandGroup_);
+  auto* wandTolLayout = new QHBoxLayout(wandTolRow);
+  wandTolLayout->setContentsMargins(0, 0, 0, 0);
+  wandToleranceSlider_ = new QSlider(Qt::Horizontal, wandTolRow);
+  wandToleranceSlider_->setRange(0, 255);
+  wandToleranceSlider_->setSingleStep(1);
+  wandToleranceLabel_ = new QLabel("0", wandTolRow);
+  wandToleranceLabel_->setFixedWidth(42);
+  wandToleranceLabel_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+  wandTolLayout->addWidget(wandToleranceSlider_, 1);
+  wandTolLayout->addWidget(wandToleranceLabel_);
+  connect(wandToleranceSlider_, &QSlider::valueChanged, this,
+          &ToolsPanel::onWandToleranceChanged);
+  wandForm->addRow(tr("Tolerance"), wandTolRow);
+  wandVbox->addLayout(wandForm);
+  wandGroup_->setVisible(false);
+  vbox->addWidget(wandGroup_);
 
   // -- Brush group (hidden when non-brush tools are active) ---------------
   brushGroup_ = new QWidget(root);
@@ -309,9 +385,11 @@ void ToolsPanel::setActiveTool(ToolId id) {
   if (pickBrushBtn_) pickBrushBtn_->setChecked(id == ToolId::Brush);
   if (pickMarqueeBtn_) pickMarqueeBtn_->setChecked(id == ToolId::Marquee);
   if (pickBucketBtn_) pickBucketBtn_->setChecked(id == ToolId::Bucket);
+  if (pickWandBtn_) pickWandBtn_->setChecked(id == ToolId::MagicWand);
   if (brushGroup_) brushGroup_->setVisible(id == ToolId::Brush);
   if (marqueeGroup_) marqueeGroup_->setVisible(id == ToolId::Marquee);
   if (bucketGroup_) bucketGroup_->setVisible(id == ToolId::Bucket);
+  if (wandGroup_) wandGroup_->setVisible(id == ToolId::MagicWand);
 }
 
 void ToolsPanel::setMarqueeMode(SelectionMode m) {
@@ -320,6 +398,13 @@ void ToolsPanel::setMarqueeMode(SelectionMode m) {
   if (marqueeAddBtn_)       marqueeAddBtn_->setChecked(m == SelectionMode::Add);
   if (marqueeSubtractBtn_)  marqueeSubtractBtn_->setChecked(m == SelectionMode::Subtract);
   if (marqueeIntersectBtn_) marqueeIntersectBtn_->setChecked(m == SelectionMode::Intersect);
+}
+
+void ToolsPanel::setWandMode(SelectionMode m) {
+  if (wandReplaceBtn_)   wandReplaceBtn_->setChecked(m == SelectionMode::Replace);
+  if (wandAddBtn_)       wandAddBtn_->setChecked(m == SelectionMode::Add);
+  if (wandSubtractBtn_)  wandSubtractBtn_->setChecked(m == SelectionMode::Subtract);
+  if (wandIntersectBtn_) wandIntersectBtn_->setChecked(m == SelectionMode::Intersect);
 }
 
 void ToolsPanel::setBrushTool(BrushTool* tool) {
@@ -341,6 +426,13 @@ void ToolsPanel::setBucketTool(BucketTool* tool) {
                              : 100);
   // Seed the fill color from the current fg swatch.
   applyFgToBrush();
+}
+
+void ToolsPanel::setMagicWandTool(MagicWandTool* tool) {
+  wand_ = tool;
+  if (!wand_) return;
+  onWandToleranceChanged(wandToleranceSlider_ ? wandToleranceSlider_->value()
+                                              : 0);
 }
 
 void ToolsPanel::refreshFromBrush() {
@@ -439,6 +531,11 @@ void ToolsPanel::onBucketOpacityChanged(int v) {
   if (bucketOpacityLabel_)
     bucketOpacityLabel_->setText(QStringLiteral("%1%").arg(v));
   if (bucket_) bucket_->setOpacity(v / 100.f);
+}
+
+void ToolsPanel::onWandToleranceChanged(int v) {
+  if (wandToleranceLabel_) wandToleranceLabel_->setText(QString::number(v));
+  if (wand_) wand_->setTolerance(v / 255.f);
 }
 
 void ToolsPanel::updateSwatchColors() {

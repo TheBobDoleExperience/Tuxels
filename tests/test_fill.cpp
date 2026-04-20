@@ -8,6 +8,7 @@
 #include "layers/PixelLayer.h"
 #include "test_harness.h"
 #include "tools/BucketTool.h"
+#include "tools/MagicWandTool.h"
 
 namespace tuxels {
 
@@ -179,6 +180,115 @@ TEST(bucket_tool_ignores_non_left_button) {
   bucket.press(doc, 4.f, 4.f, MouseButton::Right);
   auto fill = bucket.takeLastFill();
   CHECK(fill.layer == nullptr);
+}
+
+TEST(flood_select_produces_mask_of_connected_region) {
+  TuxImage img(32, 32);
+  img.fill(kBlack);
+  for (int x = 0; x < 32; ++x) img.setPixel(x, 16, kGreen);  // barrier
+
+  auto mask = floodSelect(img, 5, 5, /*tolerance=*/0.f, nullptr);
+  CHECK(mask != nullptr);
+  // Top half selected, barrier + bottom half not.
+  CHECK_NEAR(mask->sample(0, 0), 1.f, 1e-5f);
+  CHECK_NEAR(mask->sample(31, 15), 1.f, 1e-5f);
+  CHECK_NEAR(mask->sample(15, 16), 0.f, 1e-5f);
+  CHECK_NEAR(mask->sample(15, 17), 0.f, 1e-5f);
+}
+
+TEST(flood_select_returns_null_when_nothing_matches) {
+  TuxImage img(8, 8);
+  img.fill(kBlack);
+  auto mask = floodSelect(img, -1, 0, 0.f, nullptr);
+  CHECK(mask == nullptr);
+}
+
+TEST(flood_select_respects_clip_selection) {
+  TuxImage img(16, 16);
+  img.fill(kBlack);
+  auto clip = std::make_unique<SelectionMask>(16, 16);
+  clip->fillRect(Rect{4, 4, 8, 8}, 1.f);
+  auto mask = floodSelect(img, 8, 8, /*tolerance=*/0.f, clip.get());
+  CHECK(mask != nullptr);
+  CHECK_NEAR(mask->sample(8, 8), 1.f, 1e-5f);
+  CHECK_NEAR(mask->sample(5, 5), 1.f, 1e-5f);
+  CHECK_NEAR(mask->sample(3, 3), 0.f, 1e-5f);
+  CHECK_NEAR(mask->sample(12, 12), 0.f, 1e-5f);
+}
+
+TEST(magic_wand_replace_selects_connected_region) {
+  Document doc(32, 32);
+  auto* layer = doc.addBlankPixelLayer("L");
+  layer->image.fill(kBlack);
+  for (int x = 0; x < 32; ++x) layer->image.setPixel(x, 16, kGreen);
+
+  MagicWandTool w;
+  w.setTolerance(0.f);
+  w.setMode(SelectionMode::Replace);
+  w.setModifiers(Mod::None);
+  w.press(doc, 5.f, 5.f, MouseButton::Left);
+
+  auto c = w.takeCommit();
+  CHECK(c.has_value());
+  CHECK(c->before == nullptr);
+  CHECK(c->after != nullptr);
+  CHECK_NEAR(c->after->sample(5, 5), 1.f, 1e-5f);
+  CHECK_NEAR(c->after->sample(20, 20), 0.f, 1e-5f);
+}
+
+TEST(magic_wand_shift_adds_to_existing_selection) {
+  Document doc(32, 32);
+  auto* layer = doc.addBlankPixelLayer("L");
+  layer->image.fill(kBlack);
+  for (int x = 0; x < 32; ++x) layer->image.setPixel(x, 16, kGreen);
+
+  auto initial = std::make_unique<SelectionMask>(32, 32);
+  initial->fillRect(Rect{20, 20, 8, 8}, 1.f);
+  doc.setSelection(std::move(initial));
+
+  MagicWandTool w;
+  w.setTolerance(0.f);
+  w.setModifiers(Mod::Shift);  // shift-click → Add
+  w.press(doc, 5.f, 5.f, MouseButton::Left);
+
+  auto c = w.takeCommit();
+  CHECK(c.has_value());
+  CHECK(c->after != nullptr);
+  // Original rect still selected.
+  CHECK_NEAR(c->after->sample(23, 23), 1.f, 1e-5f);
+  // Newly-wanded top half selected too.
+  CHECK_NEAR(c->after->sample(5, 5), 1.f, 1e-5f);
+  // Bottom half still unselected.
+  CHECK_NEAR(c->after->sample(5, 25), 0.f, 1e-5f);
+}
+
+TEST(magic_wand_persistent_mode_drives_subtract) {
+  Document doc(32, 32);
+  auto* layer = doc.addBlankPixelLayer("L");
+  layer->image.fill(kBlack);
+
+  auto initial = std::make_unique<SelectionMask>(32, 32);
+  initial->fillRect(Rect{0, 0, 32, 32}, 1.f);  // all selected
+  doc.setSelection(std::move(initial));
+
+  MagicWandTool w;
+  w.setTolerance(0.f);
+  w.setMode(SelectionMode::Subtract);
+  w.setModifiers(Mod::None);
+  w.press(doc, 16.f, 16.f, MouseButton::Left);
+
+  auto c = w.takeCommit();
+  CHECK(c.has_value());
+  CHECK(c->after == nullptr);  // subtracting everything collapses to null
+}
+
+TEST(magic_wand_replace_outside_layer_noop) {
+  Document doc(8, 8);
+  doc.addBlankPixelLayer("L");
+  MagicWandTool w;
+  w.press(doc, -1.f, -1.f, MouseButton::Left);
+  auto c = w.takeCommit();
+  CHECK(!c.has_value());
 }
 
 TEST(bucket_fill_transparent_over_alpha_zero_makes_coverage) {
