@@ -33,6 +33,7 @@
 #include "tools/MarqueeTool.h"
 #include "tools/MoveTool.h"
 #include "tools/PolyLassoTool.h"
+#include "tools/SelectByColorTool.h"
 #include "tools/TransformTool.h"
 #include "ui/CanvasView.h"
 #include "ui/LayersPanel.h"
@@ -53,6 +54,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   transformTool_ = std::make_unique<TransformTool>();
   lassoTool_ = std::make_unique<LassoTool>();
   polyLassoTool_ = std::make_unique<PolyLassoTool>();
+  selectByColorTool_ = std::make_unique<SelectByColorTool>();
   undoStack_ = std::make_unique<UndoStack>(/*maxDepth=*/64);
 
   canvas_ = new CanvasView(this);
@@ -196,6 +198,16 @@ void MainWindow::buildMenus() {
           [this]() { setActiveTool(ToolId::MagicWand); });
   addAction(pickWand);
 
+  // Shift+W cycles within the color-selection group (Magic Wand ↔ Select
+  // By Color), matching Photoshop's grouped-tool behaviour.
+  auto* cycleWandGroup = new QAction(this);
+  cycleWandGroup->setShortcut(QKeySequence(tr("Shift+W")));
+  connect(cycleWandGroup, &QAction::triggered, this, [this]() {
+    setActiveTool(activeToolId_ == ToolId::MagicWand ? ToolId::SelectByColor
+                                                     : ToolId::MagicWand);
+  });
+  addAction(cycleWandGroup);
+
   auto* pickCrop = new QAction(this);
   pickCrop->setShortcut(QKeySequence(tr("C")));
   connect(pickCrop, &QAction::triggered, this,
@@ -238,6 +250,7 @@ void MainWindow::buildDocks() {
   toolsPanel_->setBrushTool(brushTool_.get());
   toolsPanel_->setBucketTool(bucketTool_.get());
   toolsPanel_->setMagicWandTool(wandTool_.get());
+  toolsPanel_->setSelectByColorTool(selectByColorTool_.get());
   toolsPanel_->setLassoTools(lassoTool_.get(), polyLassoTool_.get());
   toolsPanel_->setActiveTool(activeToolId_);
   connect(toolsPanel_, &ToolsPanel::toolPicked, this,
@@ -248,7 +261,10 @@ void MainWindow::buildDocks() {
           });
   connect(toolsPanel_, &ToolsPanel::wandModeChanged, this,
           [this](SelectionMode m) {
+            // Wand and Select-By-Color share the options row; push the
+            // mode into both so switching between them preserves it.
             if (wandTool_) wandTool_->setMode(m);
+            if (selectByColorTool_) selectByColorTool_->setMode(m);
           });
   connect(toolsPanel_, &ToolsPanel::lassoModeChanged, this,
           [this](SelectionMode m) {
@@ -704,6 +720,18 @@ void MainWindow::onLayerPainted() {
       if (canvas_) canvas_->refreshSelectionOverlay();
     }
   }
+  // Select-By-Color commit — same selection-command plumbing. The tool
+  // commits on press (single-click gesture), so the commit is ready by the
+  // time layerPainted fires.
+  if (selectByColorTool_) {
+    if (auto commit = selectByColorTool_->takeCommit()) {
+      doc_->setSelection(commit->after ? commit->after->clone() : nullptr);
+      undoStack_->push(std::make_unique<SelectionCommand>(
+          doc_.get(), std::move(commit->before), std::move(commit->after),
+          commit->label));
+      if (canvas_) canvas_->refreshSelectionOverlay();
+    }
+  }
   // Crop commit. The CropCommand constructor snapshots the document, then
   // applies the crop in place; we only have to push it onto the stack and
   // refresh the UI. Dimensions change, so do a full recompose + rebuild the
@@ -785,6 +813,9 @@ void MainWindow::setActiveTool(ToolId id) {
       break;
     case ToolId::PolyLasso:
       if (canvas_) canvas_->setTool(polyLassoTool_.get());
+      break;
+    case ToolId::SelectByColor:
+      if (canvas_) canvas_->setTool(selectByColorTool_.get());
       break;
   }
   if (canvas_) canvas_->setToolCursor(CanvasView::cursorForTool(id));

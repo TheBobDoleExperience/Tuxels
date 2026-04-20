@@ -40,6 +40,7 @@ set(TUXELS_CORE_SOURCES
   src/tools/MarqueeTool.cpp
   src/tools/MoveTool.cpp
   src/tools/PolyLassoTool.cpp
+  src/tools/SelectByColorTool.cpp
   src/tools/TransformTool.cpp
 )
 
@@ -106,6 +107,7 @@ tuxels_add_test(test_transform_command)
 tuxels_add_test(test_transform_tool)
 tuxels_add_test(test_polygon_fill)
 tuxels_add_test(test_lasso_tool)
+tuxels_add_test(test_select_by_color)
 
 add_executable(test_png_io tests/test_png_io.cpp)
 set_target_properties(test_png_io PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)

@@ -8,17 +8,6 @@
 
 namespace tuxels {
 
-namespace {
-
-inline float channelDist(const Rgba32F& a, const Rgba32F& b) {
-  const float dr = std::fabs(a.r - b.r);
-  const float dg = std::fabs(a.g - b.g);
-  const float db = std::fabs(a.b - b.b);
-  return std::max(dr, std::max(dg, db));
-}
-
-}  // namespace
-
 FloodFillResult floodFill(TuxImage& target, int seedX, int seedY,
                           Rgba32F fillColor,
                           const FloodFillOptions& opts,

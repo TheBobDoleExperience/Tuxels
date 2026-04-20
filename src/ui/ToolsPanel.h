@@ -20,6 +20,7 @@ class BucketTool;
 class LassoTool;
 class MagicWandTool;
 class PolyLassoTool;
+class SelectByColorTool;
 
 // Left-side dock: tool picker (Brush / Marquee / …) plus the active tool's
 // parameter controls. Brush: fg/bg swatches + size/hardness/opacity/flow.
@@ -49,6 +50,12 @@ class ToolsPanel : public QDockWidget {
   // mode into it; the tool's own pending commit is consumed by MainWindow
   // on press.
   void setMagicWandTool(MagicWandTool* tool);
+
+  // Attach the live SelectByColorTool. Shares the wand options row — same
+  // tolerance slider + combine-mode buttons drive both tools, matching
+  // Photoshop's grouped-tool UX (Shift-W cycles between them). The panel
+  // pushes changes into both so the setting is tool-agnostic.
+  void setSelectByColorTool(SelectByColorTool* tool);
 
   // Attach the live lasso tools. Both share the same options row — one
   // persistent combine mode that applies to whichever lasso is active.
@@ -124,6 +131,7 @@ class ToolsPanel : public QDockWidget {
   QToolButton* pickTransformBtn_ = nullptr;
   QToolButton* pickLassoBtn_ = nullptr;
   QToolButton* pickPolyLassoBtn_ = nullptr;
+  QToolButton* pickSelectByColorBtn_ = nullptr;
   QWidget* brushGroup_ = nullptr;
   QWidget* marqueeGroup_ = nullptr;
   QWidget* bucketGroup_ = nullptr;
@@ -149,6 +157,8 @@ class ToolsPanel : public QDockWidget {
   QLabel* bucketOpacityLabel_ = nullptr;
 
   MagicWandTool* wand_ = nullptr;
+  SelectByColorTool* selectByColor_ = nullptr;
+  QLabel* wandHeader_ = nullptr;
   QSlider* wandToleranceSlider_ = nullptr;
   QLabel* wandToleranceLabel_ = nullptr;
 

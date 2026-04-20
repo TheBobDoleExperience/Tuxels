@@ -12,6 +12,7 @@ enum class ToolId {
   Transform,
   Lasso,
   PolyLasso,
+  SelectByColor,
 };
 
 }  // namespace tuxels

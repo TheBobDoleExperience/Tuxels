@@ -1,11 +1,25 @@
 #pragma once
 
+#include <algorithm>
+#include <cmath>
+
 #include "core/Pixel.h"
 #include "core/TuxImage.h"
 
 namespace tuxels {
 
 class SelectionMask;
+
+// L∞ (channel-max) distance over RGB. Shared by the contiguous flood path
+// and the non-contiguous Select By Color tool — both compare candidate
+// colors against a seed with the same metric so their tolerance sliders
+// mean the same thing.
+inline float channelDist(const Rgba32F& a, const Rgba32F& b) {
+  const float dr = std::fabs(a.r - b.r);
+  const float dg = std::fabs(a.g - b.g);
+  const float db = std::fabs(a.b - b.b);
+  return std::max(dr, std::max(dg, db));
+}
 
 struct FloodFillOptions {
   // Max L∞ distance (per-channel max |a - b|) a pixel's source color may

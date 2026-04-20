@@ -21,6 +21,7 @@
 #include "tools/LassoTool.h"
 #include "tools/MagicWandTool.h"
 #include "tools/PolyLassoTool.h"
+#include "tools/SelectByColorTool.h"
 
 namespace tuxels {
 
@@ -129,6 +130,15 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
   connect(pickWandBtn_, &QToolButton::clicked, this,
           [this]() { emit toolPicked(ToolId::MagicWand); });
 
+  pickSelectByColorBtn_ = new QToolButton(pickerRow);
+  pickSelectByColorBtn_->setText("Y");
+  pickSelectByColorBtn_->setToolTip(
+      tr("Select By Color — non-contiguous color pick  (Shift+W)"));
+  pickSelectByColorBtn_->setCheckable(true);
+  pickerGroup->addButton(pickSelectByColorBtn_);
+  connect(pickSelectByColorBtn_, &QToolButton::clicked, this,
+          [this]() { emit toolPicked(ToolId::SelectByColor); });
+
   pickCropBtn_ = new QToolButton(pickerRow);
   pickCropBtn_->setText("C");
   pickCropBtn_->setToolTip(tr("Crop  (C)"));
@@ -159,6 +169,7 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
   pickerLayout->addWidget(pickPolyLassoBtn_);
   pickerLayout->addWidget(pickBucketBtn_);
   pickerLayout->addWidget(pickWandBtn_);
+  pickerLayout->addWidget(pickSelectByColorBtn_);
   pickerLayout->addWidget(pickCropBtn_);
   pickerLayout->addWidget(pickMoveBtn_);
   pickerLayout->addWidget(pickTransformBtn_);
@@ -310,8 +321,8 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
   auto* wandVbox = new QVBoxLayout(wandGroup_);
   wandVbox->setContentsMargins(0, 0, 0, 0);
   wandVbox->setSpacing(4);
-  auto* wandHeader = new QLabel(tr("<b>Magic Wand</b>"), wandGroup_);
-  wandVbox->addWidget(wandHeader);
+  wandHeader_ = new QLabel(tr("<b>Magic Wand</b>"), wandGroup_);
+  wandVbox->addWidget(wandHeader_);
 
   // Combine-mode row — same four buttons as the Marquee options row, kept
   // separate so each tool carries its own persistent mode. Alt-based
@@ -480,6 +491,8 @@ void ToolsPanel::setActiveTool(ToolId id) {
   if (pickMarqueeBtn_) pickMarqueeBtn_->setChecked(id == ToolId::Marquee);
   if (pickBucketBtn_) pickBucketBtn_->setChecked(id == ToolId::Bucket);
   if (pickWandBtn_) pickWandBtn_->setChecked(id == ToolId::MagicWand);
+  if (pickSelectByColorBtn_)
+    pickSelectByColorBtn_->setChecked(id == ToolId::SelectByColor);
   if (pickCropBtn_) pickCropBtn_->setChecked(id == ToolId::Crop);
   if (pickMoveBtn_) pickMoveBtn_->setChecked(id == ToolId::Move);
   if (pickTransformBtn_) pickTransformBtn_->setChecked(id == ToolId::Transform);
@@ -489,7 +502,14 @@ void ToolsPanel::setActiveTool(ToolId id) {
   if (brushGroup_) brushGroup_->setVisible(id == ToolId::Brush);
   if (marqueeGroup_) marqueeGroup_->setVisible(id == ToolId::Marquee);
   if (bucketGroup_) bucketGroup_->setVisible(id == ToolId::Bucket);
-  if (wandGroup_) wandGroup_->setVisible(id == ToolId::MagicWand);
+  if (wandGroup_)
+    wandGroup_->setVisible(id == ToolId::MagicWand ||
+                           id == ToolId::SelectByColor);
+  if (wandHeader_) {
+    wandHeader_->setText(id == ToolId::SelectByColor
+                             ? tr("<b>Select By Color</b>")
+                             : tr("<b>Magic Wand</b>"));
+  }
   if (lassoGroup_)
     lassoGroup_->setVisible(id == ToolId::Lasso || id == ToolId::PolyLasso);
 }
@@ -540,6 +560,15 @@ void ToolsPanel::setBucketTool(BucketTool* tool) {
 void ToolsPanel::setMagicWandTool(MagicWandTool* tool) {
   wand_ = tool;
   if (!wand_) return;
+  onWandToleranceChanged(wandToleranceSlider_ ? wandToleranceSlider_->value()
+                                              : 0);
+}
+
+void ToolsPanel::setSelectByColorTool(SelectByColorTool* tool) {
+  selectByColor_ = tool;
+  if (!selectByColor_) return;
+  // Seed the tool's tolerance from the shared wand slider so its first
+  // click uses the value the user sees in the panel.
   onWandToleranceChanged(wandToleranceSlider_ ? wandToleranceSlider_->value()
                                               : 0);
 }
@@ -653,7 +682,9 @@ void ToolsPanel::onBucketOpacityChanged(int v) {
 
 void ToolsPanel::onWandToleranceChanged(int v) {
   if (wandToleranceLabel_) wandToleranceLabel_->setText(QString::number(v));
-  if (wand_) wand_->setTolerance(v / 255.f);
+  const float t = v / 255.f;
+  if (wand_) wand_->setTolerance(t);
+  if (selectByColor_) selectByColor_->setTolerance(t);
 }
 
 void ToolsPanel::updateSwatchColors() {

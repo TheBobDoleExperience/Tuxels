@@ -20,6 +20,7 @@ class MagicWandTool;
 class MarqueeTool;
 class MoveTool;
 class PolyLassoTool;
+class SelectByColorTool;
 class ToolsPanel;
 class TransformTool;
 class UndoStack;
@@ -86,6 +87,7 @@ class MainWindow : public QMainWindow {
   std::unique_ptr<TransformTool> transformTool_;
   std::unique_ptr<LassoTool> lassoTool_;
   std::unique_ptr<PolyLassoTool> polyLassoTool_;
+  std::unique_ptr<SelectByColorTool> selectByColorTool_;
   std::unique_ptr<UndoStack> undoStack_;
   CanvasView* canvas_ = nullptr;
   LayersPanel* layersPanel_ = nullptr;

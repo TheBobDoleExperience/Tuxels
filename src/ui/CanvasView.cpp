@@ -189,6 +189,10 @@ QCursor CanvasView::cursorForTool(ToolId id) {
       // Crosshair matches the marquee idiom and keeps vertex placement
       // precise at any zoom.
       return QCursor(Qt::CrossCursor);
+    case ToolId::SelectByColor:
+      // Reuse the wand pixmap — Photoshop groups them and users expect
+      // the same cursor shape.
+      return makeWandCursor();
   }
   return QCursor(Qt::ArrowCursor);
 }
