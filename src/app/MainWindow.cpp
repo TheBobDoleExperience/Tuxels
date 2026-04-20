@@ -73,6 +73,10 @@ void MainWindow::buildMenus() {
   openAct->setShortcut(QKeySequence::Open);
   connect(openAct, &QAction::triggered, this, &MainWindow::onFileOpen);
 
+  auto* placeAct = fileMenu->addAction(tr("&Place…"));
+  placeAct->setShortcut(QKeySequence(tr("Ctrl+Shift+P")));
+  connect(placeAct, &QAction::triggered, this, &MainWindow::onFilePlace);
+
   auto* saveAsAct = fileMenu->addAction(tr("&Save As…"));
   saveAsAct->setShortcut(QKeySequence::SaveAs);
   connect(saveAsAct, &QAction::triggered, this, &MainWindow::onFileSaveAs);
@@ -339,6 +343,76 @@ void MainWindow::onFileOpen() {
   layersPanel_->refresh();
   canvas_->requestRecomposite();
   statusBar()->showMessage(tr("Opened %1").arg(path), 3000);
+}
+
+void MainWindow::onFilePlace() {
+  if (!doc_ || doc_->width() <= 0 || doc_->height() <= 0) {
+    QMessageBox::warning(this, tr("Place"),
+                         tr("Open or create a document first."));
+    return;
+  }
+  const QString path = QFileDialog::getOpenFileName(
+      this, tr("Place Image"), QString(), tr("PNG Images (*.png)"));
+  if (path.isEmpty()) return;
+
+  QString err;
+  auto img = loadPng(path, &err);
+  if (!img) {
+    QMessageBox::warning(this, tr("Place Failed"),
+                         tr("Could not open %1:\n%2").arg(path, err));
+    return;
+  }
+
+  // Center the placed image inside the doc. Oversized images keep offscreen
+  // pixels thanks to the M2-S0 origin plumbing — they become visible once
+  // the layer is moved, or the doc is resized/uncropped.
+  const int pw = img->width();
+  const int ph = img->height();
+  const int ox = (doc_->width() - pw) / 2;
+  const int oy = (doc_->height() - ph) / 2;
+  const std::string name = QFileInfo(path).fileName().toStdString();
+  const LayerId id = doc_->nextLayerId();
+  const int prevActive = doc_->activeLayerIndex();
+
+  // Shared stash so redo reinstalls the exact same layer instance that undo
+  // detached — mirrors `onLayerAdd`.
+  auto stash = std::make_shared<std::unique_ptr<LayerBase>>();
+  auto cached = std::make_shared<TuxImage>(std::move(*img));
+
+  auto doIt = [this, stash, cached, name, id, ox, oy]() mutable {
+    std::unique_ptr<LayerBase> layer;
+    if (*stash) {
+      layer = std::move(*stash);
+    } else {
+      auto px = std::make_unique<PixelLayer>();
+      px->id = id;
+      px->name = name;
+      px->originX = ox;
+      px->originY = oy;
+      // First execution consumes the decoded image; subsequent redos reuse
+      // the detached layer, so `cached` only matters on the first apply.
+      px->image = std::move(*cached);
+      layer = std::move(px);
+    }
+    const std::size_t insertIdx = doc_->tree().size();
+    doc_->tree().add(std::move(layer));
+    doc_->setActiveLayerIndex(static_cast<int>(insertIdx));
+    refreshAfterUndoRedo();
+  };
+  auto undoIt = [this, stash, prevActive]() mutable {
+    const std::size_t lastIdx = doc_->tree().size() - 1;
+    *stash = doc_->tree().removeAt(lastIdx);
+    doc_->setActiveLayerIndex(prevActive);
+    refreshAfterUndoRedo();
+  };
+
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>("Place Image",
+                                                    std::move(doIt),
+                                                    std::move(undoIt)));
+  statusBar()->showMessage(
+      tr("Placed %1 (%2×%3) at (%4, %5)").arg(path).arg(pw).arg(ph).arg(ox).arg(oy),
+      3000);
 }
 
 void MainWindow::onFileSaveAs() {

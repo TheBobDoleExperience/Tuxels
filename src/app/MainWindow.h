@@ -30,6 +30,7 @@ class MainWindow : public QMainWindow {
  private slots:
   void onFileNew();
   void onFileOpen();
+  void onFilePlace();
   void onFileSaveAs();
   void onFileExport();
   void onEditUndo();

@@ -92,6 +92,7 @@ tuxels_add_test(test_fill)
 tuxels_add_test(test_crop)
 tuxels_add_test(test_txl_io)
 tuxels_add_test(test_layer_origin)
+tuxels_add_test(test_place_image)
 
 add_executable(test_png_io tests/test_png_io.cpp)
 set_target_properties(test_png_io PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
