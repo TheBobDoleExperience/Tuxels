@@ -4,75 +4,64 @@
 
 ## Immediately Next
 
-**M3-S6 landed** (B&C + Hue/Saturation adjustments — new layer types +
-modal dialogs + MainWindow wiring + `.txl` v3 kind-ordinals 4/5
-activated; 274 tests green, +16 across new `test_brightness_contrast`,
-new `test_hue_saturation`, and two `test_txl_io` extensions). Plan:
-`/home/james/.claude/plans/floofy-spinning-sedgewick.md` (M3), with M2
-archive at `/home/james/.claude/plans/cryptic-stargazing-moonbeam.md`.
+**M3 shipped** as `v0.3.0-m3` on 2026-04-22 (commit `e11aff9`, 275
+tests). Adjustment-layer infrastructure + Levels + Curves +
+Brightness/Contrast + Hue/Saturation are all live; `.txl` v3
+round-trips all four kinds with masks; Free-Transform polish trio
+(Shift aspect-lock, 15° rotation snap, movable pivot) landed in S5.
 
-**Start here: S7 — Verify + tag `v0.3.0-m3`.**
+**Start here: M4 kickoff discussion.** No plan committed yet. The
+three candidates deferred out of M3 or floated in scope-out lists:
 
-S7 is a user walkthrough on a real multi-layer doc, then the tag. The
-unit tests already cover the correctness floor; S7 catches regressions
-that only surface in interactive flow (dialog live-preview + menu
-shortcuts + re-edit paths + cross-adjustment ordering).
+1. **Adjustment-layer clip-to-layer** — explicit "this adjustment
+   affects only the layer immediately below" flag. PS calls it
+   "Create Clipping Mask". Small scope: compose-time branch that
+   narrows the kind==Adjustment accumulator to just one sibling
+   instead of the full composite below. Touches `compose()`,
+   `LayerRowWidget` (indent affordance + right-arrow glyph), the
+   adjustment-layer body (one bool + serialization), `.txl` (no
+   version bump — packs into the existing kind-specific
+   descriptor or a flag byte).
 
-Run the cold-start build + test pass first:
+2. **Properties dock** — dockable non-modal panel that replaces
+   M3's modal dialogs. Click an adjustment → its params load into
+   the dock; edit live; no OK/Cancel, live commits via
+   `LayerParamsCommand` on drag-end (not on every slider tick).
+   Larger scope: Qt docking, tab-per-adjustment-type, maintaining
+   the "snapshot on select / commit on release" undo discipline
+   without the modal reject() escape hatch.
+
+3. **Smart objects** — re-editable embedded sub-documents. A
+   smart-object layer holds a `std::unique_ptr<Document>` + a
+   cached rasterization at the parent's resolution; edits open a
+   child window; save propagates up. Largest scope — new layer
+   kind, recursive compose, `.txl` format extension (nested
+   document chunks), separate undo stack per child. Strong PSD-
+   parity value but probably a whole-milestone effort on its own.
+
+Kickoff agenda: pick the scope (one, two, or all three), draft a
+Plan, commit to it via ExitPlanMode. Ask the user which direction
+they want.
+
+Cold-start verification:
 
 ```
 cmake --build build && ctest --test-dir build
 QT_QPA_PLATFORM=offscreen timeout 2 ./build/tuxels
 ```
 
-Then walk through each of these paths on a multi-layer doc (two pixel
-layers + a mask on one is enough to shake things out):
-
-1. Open a `.txl` or PNG. `Layer → New Adjustment Layer → Levels…`.
-   Verify histogram backdrop renders; drag gamma → composite updates
-   live; OK commits, Cancel rolls back. Single-click the adjustment
-   row's left thumb → dialog re-opens; change params; OK pushes an
-   `Edit Levels` undo entry.
-2. Repeat with Curves (control-point add / drag / channel switch).
-3. **S6 new — Brightness/Contrast**: `Layer → New Adjustment Layer →
-   Brightness/Contrast…`. Drag each slider; preview updates live; OK
-   commits, Cancel rolls back. Re-edit from the "fx" thumbnail pushes
-   an `Edit Brightness/Contrast` undo entry.
-4. **S6 new — Hue/Saturation (Ctrl+U)**: verify hue spins through the
-   wheel (try ±120° on a saturated region); saturation = −1 drops
-   toward grayscale; lightness bright/dark clamp cleanly. Re-edit
-   from the "fx" thumbnail pushes an `Edit Hue/Saturation` undo entry.
-5. Toggle visibility on each adjustment → composite reverts / reapplies.
-6. Paint on the auto-attached mask → effect restricted to painted
-   region.
-7. Drag layer opacity → effect blends proportionally.
-8. `File → Save As…` → `File → Open…` round-trips all four adjustment
-   kinds + masks + ordering.
-9. Undo-redo sequence through every add/edit.
-10. Free Transform: Shift+Scale, Shift+Rotate, pivot drag all still
-    work (regression check from S5).
-
-Land any follow-up fixes inline as part of S7. Once the user signs off:
-
-```
-git tag -a v0.3.0-m3 -m "M3 — Non-destructive Adjustments (Levels, Curves, B&C, Hue/Sat)"
-git push && git push --tags
-```
-
-Then update STATUS.md's "Active Milestone" line to mark M3 ✅ shipped,
-and point NEXT.md at M4 kickoff (adjustment layer "clip to layer
-below", adjustment-layer Properties dock, smart objects — scope TBD).
+Expect 275 passing across 27 executables at `v0.3.0-m3`.
 
 ## Cold-Start Checklist
 
-1. `cat docs/STATUS.md` — current state (M3 active, S0–S6 ✅, S7 next).
-2. This file — exact next actions for S7.
+1. `cat docs/STATUS.md` — current state (M3 ✅ shipped, M4 TBD).
+2. This file — M4 kickoff candidates + kickoff agenda.
 3. `cat docs/ARCHITECTURE.md` — don't re-derive decisions.
-4. `cat /home/james/.claude/plans/floofy-spinning-sedgewick.md` — M3 plan
-   (authoritative).
+4. `cat /home/james/.claude/plans/floofy-spinning-sedgewick.md` — M3
+   plan archive (reference only; M3 shipped).
 5. `cat /home/james/.claude/plans/cryptic-stargazing-moonbeam.md` — M2
    plan archive (reference only).
-6. `git log --oneline -20` + `git tag --list` — recent commits + the
-   `v0.2.0-m2` tag (M3 tag `v0.3.0-m3` lands at S7 sign-off).
+6. `git log --oneline -20` + `git tag --list` — recent commits and
+   shipped tags (`v0.0.1-m0`, `v0.1.0-m1`, `v0.2.0-m2`, `v0.3.0-m3`).
 7. `cmake --build build && ctest --test-dir build` — confirm green
-   tree (274 passing after S6).
+   tree (275 passing at `v0.3.0-m3`).
