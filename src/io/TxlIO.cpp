@@ -1,10 +1,12 @@
 #include "io/TxlIO.h"
 
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 #include "compositor/BlendMode.h"
 #include "core/Document.h"
@@ -13,8 +15,11 @@
 #include "core/Tile.h"
 #include "core/TileStore.h"
 #include "core/TuxImage.h"
+#include "geom/Spline.h"
+#include "layers/CurvesAdjustment.h"
 #include "layers/LayerBase.h"
 #include "layers/LayerMask.h"
+#include "layers/LevelsAdjustment.h"
 #include "layers/PixelLayer.h"
 
 namespace tuxels {
@@ -22,9 +27,16 @@ namespace tuxels {
 namespace {
 
 constexpr char kMagic[8] = {'T', 'U', 'X', 'E', 'L', 'S', '\x01', '\x00'};
-constexpr uint32_t kVersionCurrent = 2;
-constexpr uint32_t kVersionLegacyNoOrigin = 1;
+constexpr uint32_t kVersionCurrent = 3;
+constexpr uint32_t kVersionV2 = 2;
+constexpr uint32_t kVersionV1 = 1;
+
 constexpr uint8_t kLayerKindPixel = 1;
+constexpr uint8_t kLayerKindLevels = 2;
+constexpr uint8_t kLayerKindCurves = 3;
+// Reserved for S6; unused on disk until then.
+constexpr uint8_t kLayerKindHueSaturation = 4;
+constexpr uint8_t kLayerKindBrightnessContrast = 5;
 
 // Host-order writes. Tuxels only targets little-endian hosts (Linux x86_64
 // in M1); a future version can add an endian marker to `Flags` if we ever
@@ -91,6 +103,74 @@ void setErr(std::string* err, std::string msg) {
   if (err) *err = std::move(msg);
 }
 
+uint8_t kindByte(const LayerBase& layer) {
+  if (layer.kind() == LayerKind::Pixel) return kLayerKindPixel;
+  if (dynamic_cast<const LevelsAdjustment*>(&layer)) return kLayerKindLevels;
+  if (dynamic_cast<const CurvesAdjustment*>(&layer)) return kLayerKindCurves;
+  // Unknown adjustment subclass — caller treats 0 as an error sentinel.
+  return 0;
+}
+
+bool writeLevelsDescriptor(std::ofstream& out,
+                            const LevelsAdjustment& layer) {
+  const auto& all = layer.allParams();
+  for (const auto& p : all) {
+    if (!writeRaw(out, p.inBlack)) return false;
+    if (!writeRaw(out, p.inWhite)) return false;
+    if (!writeRaw(out, p.gamma)) return false;
+    if (!writeRaw(out, p.outBlack)) return false;
+    if (!writeRaw(out, p.outWhite)) return false;
+  }
+  return out.good();
+}
+
+bool readLevelsDescriptor(std::ifstream& in, LevelsAdjustment& layer) {
+  std::array<LevelsParams, 4> all{};
+  for (auto& p : all) {
+    if (!readRaw(in, p.inBlack)) return false;
+    if (!readRaw(in, p.inWhite)) return false;
+    if (!readRaw(in, p.gamma)) return false;
+    if (!readRaw(in, p.outBlack)) return false;
+    if (!readRaw(in, p.outWhite)) return false;
+  }
+  layer.setAllParams(all);
+  return true;
+}
+
+bool writeCurvesDescriptor(std::ofstream& out,
+                            const CurvesAdjustment& layer) {
+  const auto& all = layer.allPoints();
+  for (const auto& channel : all) {
+    const uint32_t n = static_cast<uint32_t>(channel.size());
+    if (!writeRaw(out, n)) return false;
+    for (const SplinePoint& p : channel) {
+      if (!writeRaw(out, p.x)) return false;
+      if (!writeRaw(out, p.y)) return false;
+    }
+  }
+  return out.good();
+}
+
+// Sanity cap on per-channel control point count to guard against corrupt
+// headers requesting huge allocations. Photoshop UIs cap well below this.
+constexpr uint32_t kMaxCurvePointsPerChannel = 1u << 16;
+
+bool readCurvesDescriptor(std::ifstream& in, CurvesAdjustment& layer) {
+  CurvesAdjustment::PointsArray all{};
+  for (auto& channel : all) {
+    uint32_t n = 0;
+    if (!readRaw(in, n)) return false;
+    if (n > kMaxCurvePointsPerChannel) return false;
+    channel.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+      if (!readRaw(in, channel[i].x)) return false;
+      if (!readRaw(in, channel[i].y)) return false;
+    }
+  }
+  layer.setAllPoints(all);
+  return true;
+}
+
 }  // namespace
 
 bool saveTxl(const std::string& path, const Document& doc, std::string* err) {
@@ -122,15 +202,15 @@ bool saveTxl(const std::string& path, const Document& doc, std::string* err) {
 
   for (std::size_t i = 0; i < tree.size(); ++i) {
     const LayerBase* layer = tree.at(i);
-    const PixelLayer* px = dynamic_cast<const PixelLayer*>(layer);
-    if (!px) {
-      setErr(err, "Only PixelLayer supported in .txl v1 (layer index " +
-                      std::to_string(i) + ")");
+    const uint8_t kind = kindByte(*layer);
+    if (kind == 0) {
+      setErr(err, "Unsupported layer subclass at layer index " +
+                      std::to_string(i));
       return false;
     }
 
     writeRaw(out, static_cast<uint64_t>(layer->id));
-    writeRaw(out, kLayerKindPixel);
+    writeRaw(out, kind);
     writeRaw(out, static_cast<uint8_t>(layer->visible ? 1 : 0));
     writeRaw(out, static_cast<uint8_t>(
                       (layer->mask && layer->mask->enabled) ? 1 : 0));
@@ -138,21 +218,54 @@ bool saveTxl(const std::string& path, const Document& doc, std::string* err) {
     writeRaw(out, layer->opacity);
     writeRaw(out, static_cast<uint32_t>(layer->blend));
 
-    // v2 additions: layer backing-image dims + doc-coord origin. Makes
-    // Place Image / Move / Free Transform reversible across save-load.
-    writeRaw(out, static_cast<uint32_t>(px->image.width()));
-    writeRaw(out, static_cast<uint32_t>(px->image.height()));
-    writeRaw(out, static_cast<int32_t>(layer->originX));
-    writeRaw(out, static_cast<int32_t>(layer->originY));
+    // Adjustment layers carry no backing image — their dims / origin are
+    // sentinel zeros on disk; masks are doc-sized (reconstructed on load).
+    if (kind == kLayerKindPixel) {
+      const auto* px = static_cast<const PixelLayer*>(layer);
+      writeRaw(out, static_cast<uint32_t>(px->image.width()));
+      writeRaw(out, static_cast<uint32_t>(px->image.height()));
+      writeRaw(out, static_cast<int32_t>(layer->originX));
+      writeRaw(out, static_cast<int32_t>(layer->originY));
+    } else {
+      writeRaw(out, static_cast<uint32_t>(0));
+      writeRaw(out, static_cast<uint32_t>(0));
+      writeRaw(out, static_cast<int32_t>(0));
+      writeRaw(out, static_cast<int32_t>(0));
+    }
 
     const uint32_t nameLen = static_cast<uint32_t>(layer->name.size());
     writeRaw(out, nameLen);
     if (nameLen > 0) out.write(layer->name.data(), nameLen);
 
-    if (!writeImage(out, px->image)) {
-      setErr(err, "Failed writing layer image tiles");
-      return false;
+    if (kind == kLayerKindPixel) {
+      const auto* px = static_cast<const PixelLayer*>(layer);
+      if (!writeImage(out, px->image)) {
+        setErr(err, "Failed writing layer image tiles");
+        return false;
+      }
+    } else {
+      // Adjustment kinds: NumImageTiles = 0 sentinel for shape uniformity,
+      // followed by the kind-specific descriptor.
+      writeRaw(out, static_cast<uint32_t>(0));
+      if (kind == kLayerKindLevels) {
+        const auto* lv = dynamic_cast<const LevelsAdjustment*>(layer);
+        if (!lv || !writeLevelsDescriptor(out, *lv)) {
+          setErr(err, "Failed writing Levels descriptor");
+          return false;
+        }
+      } else if (kind == kLayerKindCurves) {
+        const auto* cv = dynamic_cast<const CurvesAdjustment*>(layer);
+        if (!cv || !writeCurvesDescriptor(out, *cv)) {
+          setErr(err, "Failed writing Curves descriptor");
+          return false;
+        }
+      } else {
+        setErr(err, "Writer does not know how to serialize kind " +
+                        std::to_string(kind));
+        return false;
+      }
     }
+
     if (layer->mask) {
       if (!writeImage(out, layer->mask->image)) {
         setErr(err, "Failed writing mask tiles");
@@ -195,7 +308,8 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
 
   uint32_t version = 0, flags = 0;
   readRaw(in, version);
-  if (version != kVersionCurrent && version != kVersionLegacyNoOrigin) {
+  if (version != kVersionCurrent && version != kVersionV2 &&
+      version != kVersionV1) {
     setErr(err, "Unsupported .txl version: " + std::to_string(version));
     return std::nullopt;
   }
@@ -204,7 +318,8 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
     setErr(err, "Unknown .txl flags bits: " + std::to_string(flags));
     return std::nullopt;
   }
-  const bool hasOriginFields = (version >= kVersionCurrent);
+  const bool hasOriginFields = (version >= kVersionV2);
+  const bool acceptsAdjustmentKinds = (version >= kVersionCurrent);
 
   uint32_t w = 0, h = 0;
   int32_t activeLayer = 0;
@@ -259,9 +374,18 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
       setErr(err, "Truncated layer header at index " + std::to_string(li));
       return std::nullopt;
     }
-    if (kind != kLayerKindPixel) {
+    const bool isAdjustmentKind =
+        (kind == kLayerKindLevels || kind == kLayerKindCurves ||
+         kind == kLayerKindHueSaturation ||
+         kind == kLayerKindBrightnessContrast);
+    if (kind != kLayerKindPixel && !isAdjustmentKind) {
       setErr(err, "Unknown layer kind " + std::to_string(kind) +
                       " at index " + std::to_string(li));
+      return std::nullopt;
+    }
+    if (isAdjustmentKind && !acceptsAdjustmentKinds) {
+      setErr(err, "Layer kind " + std::to_string(kind) +
+                      " requires .txl v3 or later");
       return std::nullopt;
     }
     if (nameLen > (1u << 20)) {
@@ -285,8 +409,50 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
       }
     }
 
-    auto layer = std::make_unique<PixelLayer>(static_cast<int>(layerW),
-                                               static_cast<int>(layerH));
+    std::unique_ptr<LayerBase> layer;
+    if (kind == kLayerKindPixel) {
+      auto px = std::make_unique<PixelLayer>(static_cast<int>(layerW),
+                                              static_cast<int>(layerH));
+      if (!readImageInto(in, px->image)) {
+        setErr(err, "Failed reading layer image (layer " +
+                        std::to_string(li) + ")");
+        return std::nullopt;
+      }
+      layer = std::move(px);
+    } else {
+      // Adjustment layers: expect NumImageTiles == 0 sentinel, then descriptor.
+      uint32_t numImageTiles = 0;
+      if (!readRaw(in, numImageTiles)) {
+        setErr(err, "Truncated adjustment image-tile count");
+        return std::nullopt;
+      }
+      if (numImageTiles != 0) {
+        setErr(err, "Adjustment layer must have 0 image tiles");
+        return std::nullopt;
+      }
+      if (kind == kLayerKindLevels) {
+        auto lv = std::make_unique<LevelsAdjustment>();
+        if (!readLevelsDescriptor(in, *lv)) {
+          setErr(err, "Failed reading Levels descriptor");
+          return std::nullopt;
+        }
+        layer = std::move(lv);
+      } else if (kind == kLayerKindCurves) {
+        auto cv = std::make_unique<CurvesAdjustment>();
+        if (!readCurvesDescriptor(in, *cv)) {
+          setErr(err, "Failed reading Curves descriptor");
+          return std::nullopt;
+        }
+        layer = std::move(cv);
+      } else {
+        // Reserved kinds (HueSat, B&C) are format-valid but no subclass
+        // yet exists to materialize them. Fail cleanly.
+        setErr(err, "Adjustment kind " + std::to_string(kind) +
+                        " is reserved but not yet implemented");
+        return std::nullopt;
+      }
+    }
+
     layer->id = id;
     layer->name = std::move(name);
     layer->visible = (visible != 0);
@@ -295,14 +461,14 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
     layer->originX = originX;
     layer->originY = originY;
 
-    if (!readImageInto(in, layer->image)) {
-      setErr(err, "Failed reading layer image (layer " + std::to_string(li) + ")");
-      return std::nullopt;
-    }
-
     if (hasMask) {
-      auto mask = std::make_unique<LayerMask>(static_cast<int>(layerW),
-                                               static_cast<int>(layerH));
+      // Pixel masks match the backing image; adjustment masks are doc-sized
+      // per the `Document::addAdjustmentLayer` invariant.
+      const int maskW = (kind == kLayerKindPixel) ? static_cast<int>(layerW)
+                                                   : static_cast<int>(w);
+      const int maskH = (kind == kLayerKindPixel) ? static_cast<int>(layerH)
+                                                   : static_cast<int>(h);
+      auto mask = std::make_unique<LayerMask>(maskW, maskH);
       mask->enabled = (maskEnabled != 0);
       if (!readImageInto(in, mask->image)) {
         setErr(err, "Failed reading mask (layer " + std::to_string(li) + ")");
