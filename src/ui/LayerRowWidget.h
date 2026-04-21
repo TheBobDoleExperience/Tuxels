@@ -45,6 +45,9 @@ class LayerRowWidget : public QWidget {
   void maskEnabledToggleRequested(LayerBase* layer, bool oldVal, bool newVal);
   // Right-click "Delete Mask" on the mask thumb.
   void deleteMaskRequested(LayerBase* layer);
+  // Click on an adjustment layer's thumb — open the edit dialog instead of
+  // swapping the paint target (adjustment layers have no pixel data).
+  void editAdjustmentRequested(LayerBase* layer);
 
  protected:
   bool eventFilter(QObject* watched, QEvent* event) override;

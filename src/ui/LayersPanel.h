@@ -40,6 +40,7 @@ class LayersPanel : public QDockWidget {
   void paintTargetChangeRequested(LayerBase* layer, PaintTarget target);
   void maskEnabledToggleRequested(LayerBase* layer, bool oldVal, bool newVal);
   void deleteMaskRequested(LayerBase* layer);
+  void editAdjustmentRequested(LayerBase* layer);
 
  private slots:
   void onCurrentRowChanged(int row);

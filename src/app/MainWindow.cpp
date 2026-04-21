@@ -304,6 +304,8 @@ void MainWindow::buildDocks() {
           &MainWindow::onLayerMaskEnabledToggle);
   connect(layersPanel_, &LayersPanel::deleteMaskRequested, this,
           &MainWindow::onLayerDeleteMaskRequest);
+  connect(layersPanel_, &LayersPanel::editAdjustmentRequested, this,
+          &MainWindow::onEditAdjustmentRequested);
 }
 
 void MainWindow::setDocument(std::unique_ptr<Document> doc) {
@@ -997,6 +999,11 @@ void MainWindow::onLayerDeleteMaskRequest(LayerBase* layer) {
   undoStack_->push(std::make_unique<LayerOpCommand>("Delete Layer Mask",
                                                     std::move(doIt),
                                                     std::move(undoIt)));
+}
+
+void MainWindow::onEditAdjustmentRequested(LayerBase* /*layer*/) {
+  // Stub for M3-S0. Wired up in S2 (Levels dialog) / S3 (Curves) / S6
+  // (Hue/Sat, Brightness/Contrast) once the dialog classes exist.
 }
 
 void MainWindow::onBrushSizeIncrease() {

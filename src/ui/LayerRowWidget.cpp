@@ -2,11 +2,13 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QFont>
 #include <QHBoxLayout>
 #include <QImage>
 #include <QLabel>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QPalette>
 #include <QPixmap>
 #include <QSlider>
@@ -175,7 +177,13 @@ bool LayerRowWidget::eventFilter(QObject* watched, QEvent* event) {
   if (watched == thumb_ && event->type() == QEvent::MouseButtonPress) {
     auto* me = static_cast<QMouseEvent*>(event);
     if (me->button() == Qt::LeftButton) {
-      emit paintTargetChangeRequested(layer_, PaintTarget::Layer);
+      // Adjustment layers have no pixel data to paint; the thumb doubles
+      // as the edit affordance. Pixel layers keep the paint-target swap.
+      if (layer_->kind() == LayerKind::Adjustment) {
+        emit editAdjustmentRequested(layer_);
+      } else {
+        emit paintTargetChangeRequested(layer_, PaintTarget::Layer);
+      }
       return true;
     }
   } else if (watched == maskThumb_ && event->type() == QEvent::MouseButtonPress) {
@@ -202,6 +210,25 @@ bool LayerRowWidget::eventFilter(QObject* watched, QEvent* event) {
 
 void LayerRowWidget::rebuildThumbnail() {
   if (!layer_) return;
+
+  // Adjustment layers have no pixel data — render a fixed-label glyph so
+  // the row is visually distinct from pixel layers. S0 uses a generic
+  // "fx" stub; later steps can swap in "Lv"/"Cv"/etc via dynamic_cast.
+  if (layer_->kind() == LayerKind::Adjustment) {
+    QPixmap pm(kThumbPx, kThumbPx);
+    pm.fill(QColor(40, 40, 55, 255));
+    QPainter p(&pm);
+    p.setPen(QColor(220, 220, 220));
+    QFont f = p.font();
+    f.setBold(true);
+    f.setPointSize(12);
+    p.setFont(f);
+    p.drawText(pm.rect(), Qt::AlignCenter, QStringLiteral("fx"));
+    p.end();
+    thumb_->setPixmap(pm);
+    return;
+  }
+
   QImage img(kThumbPx, kThumbPx, QImage::Format_RGBA8888);
   img.fill(QColor(50, 50, 50, 255));
 

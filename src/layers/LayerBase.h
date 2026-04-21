@@ -13,6 +13,12 @@ namespace tuxels {
 
 using LayerId = uint64_t;
 
+// Discriminator used by the compositor to pick a render path. Pixel layers
+// contribute their own tile pixels (blended over the accumulator); adjustment
+// layers transform the accumulator in place. See `AdjustmentLayer` and
+// `compose()` for the corresponding dispatch.
+enum class LayerKind { Pixel, Adjustment };
+
 class LayerBase {
  public:
   virtual ~LayerBase() = default;
@@ -32,6 +38,10 @@ class LayerBase {
   int originX = 0;
   int originY = 0;
 
+  // Tells the compositor which rendering path applies. `PixelLayer` uses the
+  // default; `AdjustmentLayer` overrides to `Adjustment`.
+  virtual LayerKind kind() const { return LayerKind::Pixel; }
+
   // Render this layer's contribution for one tile. Writes kTilePx*kTilePx
   // Rgba32F values into `out`. Returns true if any non-transparent pixel was
   // written; false means the tile is empty and the compositor can skip it.
@@ -40,6 +50,9 @@ class LayerBase {
   // doc→layer coords via `originX/originY`, and fold any enabled mask into
   // the output alpha (absent mask tiles default to 1.0 = reveal). This lets
   // `compose()` stay origin-agnostic.
+  //
+  // Adjustment layers override to return `false` (no pixel contribution); the
+  // compositor dispatches them via `AdjustmentLayer::applyToAccum` instead.
   virtual bool renderTile(TileCoord tc, Rgba32F* out) const = 0;
 
   // Dissolve noise seed — derived from layer id so patterns are stable.

@@ -3,9 +3,11 @@
 #include <cstddef>
 #include <memory>
 #include <string>
+#include <type_traits>
 
 #include "core/SelectionMask.h"
 #include "layers/LayerBase.h"
+#include "layers/LayerMask.h"
 #include "layers/LayerTree.h"
 #include "layers/PixelLayer.h"
 
@@ -97,6 +99,28 @@ class Document {
     PixelLayer* raw = layer.get();
     tree_.add(std::move(layer));
     activeLayerIndex_ = static_cast<int>(tree_.size()) - 1;
+    return raw;
+  }
+
+  // Insert a non-destructive adjustment layer at the top of the tree.
+  // Auto-attaches a doc-sized white mask (`enabled = true`) and flips
+  // `paintTarget` to `Mask` so the user can immediately paint to restrict
+  // where the adjustment applies — matches PS's auto-mask affordance.
+  // Caller retains a raw pointer for subclass-specific follow-up (param
+  // edits, dialog wiring, etc.).
+  template <class T>
+  T* addAdjustmentLayer(std::unique_ptr<T> layer) {
+    static_assert(std::is_base_of_v<LayerBase, T>,
+                  "addAdjustmentLayer: T must derive from LayerBase");
+    layer->id = nextLayerId();
+    auto mask = std::make_unique<LayerMask>(width_, height_);
+    mask->image.fill(Rgba32F{1.f, 1.f, 1.f, 1.f});
+    mask->enabled = true;
+    layer->mask = std::move(mask);
+    T* raw = layer.get();
+    tree_.add(std::move(layer));
+    activeLayerIndex_ = static_cast<int>(tree_.size()) - 1;
+    paintTarget_ = PaintTarget::Mask;
     return raw;
   }
 

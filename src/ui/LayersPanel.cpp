@@ -90,6 +90,8 @@ void LayersPanel::refresh() {
             &LayersPanel::maskEnabledToggleRequested);
     connect(row, &LayerRowWidget::deleteMaskRequested, this,
             &LayersPanel::deleteMaskRequested);
+    connect(row, &LayerRowWidget::editAdjustmentRequested, this,
+            &LayersPanel::editAdjustmentRequested);
 
     auto* item = new QListWidgetItem();
     item->setSizeHint(row->sizeHint());

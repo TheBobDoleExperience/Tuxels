@@ -46,10 +46,15 @@ struct Rgba32F { float r, g, b, a; };  // 16 bytes, aligned
 - Concrete M0 subclasses:
   - `PixelLayer` — owns a `TuxImage` sized to the layer's content (not necessarily doc-sized).
 - **Origin invariants** (M2-S0):
-  - Masks share their owning layer's origin AND dimensions. Creating a mask sizes it to `layer->image.{width,height}()`, not doc dims.
+  - Masks share their owning layer's origin AND dimensions *for pixel layers*. Creating a mask sizes it to `layer->image.{width,height}()`, not doc dims.
   - `Document::addBlankPixelLayer(name)` still creates a doc-sized layer at origin `(0, 0)`; `Document::addPixelLayer(TuxImage&&, int ox, int oy, name)` installs a layer at an arbitrary origin (used by Place Image).
   - Crop intersects each layer's doc-space content rect with the crop rect; surviving rect becomes the new image, origin shifts into the new doc coord frame, non-overlapping layers drop to 0×0 (and lose their mask).
-- Future: `AdjustmentLayer`, `GroupLayer`, `SmartObjectLayer`, `TextLayer` (not in M0).
+- **Layer kind discriminator** (M3-S0):
+  - `LayerBase::kind()` returns `LayerKind::Pixel` (default) or `LayerKind::Adjustment`. The compositor dispatches on this — pixel layers go through `renderTile`+blend; adjustment layers go through `applyToAccum`+lerp-back.
+  - `AdjustmentLayer` (abstract, `src/layers/AdjustmentLayer.h`) has no backing image. Its mask is **doc-sized** (not layer-sized) since there's no image to align with; `Document::addAdjustmentLayer<T>` auto-attaches a doc-sized white mask with `enabled = true` and flips `paintTarget` to `Mask` so follow-up brush strokes paint the auto-mask by default (matches PS).
+  - Origin is always `(0, 0)` for adjustment layers. The adjustment-path compose loop exploits this + the mask's tile-grid alignment with the compose tile grid to fetch the mask tile once per compose tile.
+  - `LayerRowWidget` renders adjustment layers with an "fx" glyph thumbnail and routes left-click on the layer thumb to a new `editAdjustmentRequested(LayerBase*)` signal (pixel layers keep the paint-target swap).
+- Future: `GroupLayer`, `SmartObjectLayer`, `TextLayer` (Phase 2+). Concrete adjustment subclasses (Levels, Curves, Hue/Sat, B&C) land in M3-S2/S3/S6.
 
 ## 5. Masks
 
@@ -91,10 +96,9 @@ Exclusion:    C = Cs + Cd - 2*Cs*Cd
   - `compose(tree, out, Rect pixelRect)` — restrict the tile loop to tiles intersecting `pixelRect` (clipped to image bounds). Used on the paint hot path so a brush stamp only re-touches the tiles it lands on. Both paths go through the same inner `composeTileRange` helper.
 - Walk tile coordinates spanning the target range. For each tile coord:
   - Start with transparent accumulator (`Rgba32F{0,0,0,0}`).
-  - For each layer (bottom to top) if visible:
-    - `renderTile` → get layer tile contribution.
-    - Multiply layer alpha by `opacity` and mask value (if mask present and enabled).
-    - Blend using `layer.blend` against accumulator.
+  - For each layer (bottom to top) if visible + `opacity > 0`:
+    - **Pixel path** (`kind() == LayerKind::Pixel`): `renderTile` → get layer tile contribution (with origin translation + mask pre-multiplied in). Blend using `layer.blend` and `layer.opacity` against the accumulator.
+    - **Adjustment path** (`kind() == LayerKind::Adjustment`, M3-S0): copy the accumulator into a scratch buffer, call `applyToAccum(tc, scratch)` which the subclass rewrites in place, then lerp `accum → scratch` per pixel using `factor = opacity * maskV` (maskV is `1.0` when no mask/tile, else `maskTile->at(px,py).r`; fetched once per compose tile because adjustment masks are doc-sized and tile-aligned). Skip pixels where `accum.a <= 0` so empty regions stay empty.
   - Write accumulator into the corresponding tile of `out`.
 - **Dirty-rect path for paint:** `BrushEngine` tracks `incremental_` in addition to total `bounds_`; each stamp grows both. `ToolBase::takeDirtyRect()` (default empty, `BrushTool` forwards from the engine) drains the rect. `CanvasView` unions incoming rects into `dirtyRect_`; its `paintEvent` calls `compose(tree, out, dirtyRect_)` when set (partial) or `compose(tree, out)` otherwise (full). Only the rows of the cached `QImage` inside the dirty rect are re-quantized, and `QWidget::update(QRect)` limits Qt's repaint area. Full recompose is still used for structural ops (layer reorder, blend/opacity/visibility change, mask toggle, undo/redo) where the dirty region isn't trivially available.
 - Single-threaded CPU for M0. Multi-thread per-tile (std::async or thread pool) is a simple drop-in for later.

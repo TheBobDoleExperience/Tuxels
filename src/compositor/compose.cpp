@@ -5,6 +5,7 @@
 
 #include "compositor/blend.h"
 #include "core/Tile.h"
+#include "layers/AdjustmentLayer.h"
 
 namespace tuxels {
 
@@ -47,6 +48,7 @@ void composeTileRange(const LayerTree& tree, TuxImage& out, int tx0, int ty0,
                       int tx1, int ty1, const LayerOverride* override) {
   std::vector<Rgba32F> accum(kTilePixels);
   std::vector<Rgba32F> layerTile(kTilePixels);
+  std::vector<Rgba32F> adjScratch(kTilePixels);
 
   for (int ty = ty0; ty < ty1; ++ty) {
     for (int tx = tx0; tx < tx1; ++tx) {
@@ -56,6 +58,41 @@ void composeTileRange(const LayerTree& tree, TuxImage& out, int tx0, int ty0,
       for (std::size_t li = 0; li < tree.size(); ++li) {
         const LayerBase* layer = tree.at(li);
         if (!layer->visible || layer->opacity <= 0.f) continue;
+
+        if (layer->kind() == LayerKind::Adjustment) {
+          // Transform-in-place path: copy the current accumulator into a
+          // scratch buffer, let the adjustment rewrite it, then lerp the
+          // transformed value back over the original using
+          // `factor = mask.r * opacity`. Transparent accum pixels are
+          // skipped — an empty region stays empty. Mask tile alignment
+          // matches compose tile alignment (adjustment layers have
+          // origin (0,0) and a doc-sized mask), so one tile lookup
+          // covers the whole inner loop.
+          const auto* adj = static_cast<const AdjustmentLayer*>(layer);
+          adjScratch = accum;
+          adj->applyToAccum(tc, adjScratch.data());
+
+          const bool hasMask = layer->mask && layer->mask->enabled;
+          const Tile* maskTile =
+              hasMask ? layer->mask->image.tiles().find(tc) : nullptr;
+          const float opacity = layer->opacity;
+
+          for (int py = 0; py < kTilePx; ++py) {
+            for (int px = 0; px < kTilePx; ++px) {
+              const int idx = py * kTilePx + px;
+              if (accum[idx].a <= 0.f) continue;
+              const float maskV = maskTile ? maskTile->at(px, py).r : 1.f;
+              const float f = opacity * maskV;
+              if (f <= 0.f) continue;
+              const Rgba32F a = accum[idx];
+              const Rgba32F b = adjScratch[idx];
+              const float inv = 1.f - f;
+              accum[idx] = {a.r * inv + b.r * f, a.g * inv + b.g * f,
+                            a.b * inv + b.b * f, a.a * inv + b.a * f};
+            }
+          }
+          continue;
+        }
 
         std::fill(layerTile.begin(), layerTile.end(), Rgba32F::transparent());
         const bool useOverride = override && override->image &&
