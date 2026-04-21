@@ -43,6 +43,8 @@ class MainWindow : public QMainWindow {
   void onLayerAdd();
   void onLayerAddLevels();
   void onLayerAddCurves();
+  void onLayerAddBrightnessContrast();
+  void onLayerAddHueSaturation();
   void onLayerDelete();
   void onLayerMoveUp();
   void onLayerMoveDown();

@@ -23,7 +23,9 @@ add_compile_options(-Wall -Wextra -Wpedantic -Werror=return-type)
 set(TUXELS_CORE_SOURCES
   src/core/Histogram.cpp
   src/core/SelectionMask.cpp
+  src/layers/BrightnessContrast.cpp
   src/layers/CurvesAdjustment.cpp
+  src/layers/HueSaturation.cpp
   src/layers/LevelsAdjustment.cpp
   src/layers/PixelLayer.cpp
   src/compositor/compose.cpp
@@ -67,8 +69,12 @@ add_executable(tuxels
   src/ui/LayerRowWidget.cpp
   src/ui/LayersPanel.h
   src/ui/LayersPanel.cpp
+  src/ui/BrightnessContrastDialog.h
+  src/ui/BrightnessContrastDialog.cpp
   src/ui/CurvesDialog.h
   src/ui/CurvesDialog.cpp
+  src/ui/HueSatDialog.h
+  src/ui/HueSatDialog.cpp
   src/ui/LevelsDialog.h
   src/ui/LevelsDialog.cpp
   src/ui/ToolsPanel.h
@@ -118,7 +124,9 @@ tuxels_add_test(test_lasso_tool)
 tuxels_add_test(test_select_by_color)
 tuxels_add_test(test_brush_dynamics)
 tuxels_add_test(test_adjustment_layer)
+tuxels_add_test(test_brightness_contrast)
 tuxels_add_test(test_histogram)
+tuxels_add_test(test_hue_saturation)
 tuxels_add_test(test_curves)
 tuxels_add_test(test_levels)
 tuxels_add_test(test_spline)

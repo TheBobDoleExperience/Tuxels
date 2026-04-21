@@ -16,7 +16,9 @@
 #include "core/TileStore.h"
 #include "core/TuxImage.h"
 #include "geom/Spline.h"
+#include "layers/BrightnessContrast.h"
 #include "layers/CurvesAdjustment.h"
+#include "layers/HueSaturation.h"
 #include "layers/LayerBase.h"
 #include "layers/LayerMask.h"
 #include "layers/LevelsAdjustment.h"
@@ -34,7 +36,6 @@ constexpr uint32_t kVersionV1 = 1;
 constexpr uint8_t kLayerKindPixel = 1;
 constexpr uint8_t kLayerKindLevels = 2;
 constexpr uint8_t kLayerKindCurves = 3;
-// Reserved for S6; unused on disk until then.
 constexpr uint8_t kLayerKindHueSaturation = 4;
 constexpr uint8_t kLayerKindBrightnessContrast = 5;
 
@@ -107,6 +108,9 @@ uint8_t kindByte(const LayerBase& layer) {
   if (layer.kind() == LayerKind::Pixel) return kLayerKindPixel;
   if (dynamic_cast<const LevelsAdjustment*>(&layer)) return kLayerKindLevels;
   if (dynamic_cast<const CurvesAdjustment*>(&layer)) return kLayerKindCurves;
+  if (dynamic_cast<const HueSaturation*>(&layer)) return kLayerKindHueSaturation;
+  if (dynamic_cast<const BrightnessContrast*>(&layer))
+    return kLayerKindBrightnessContrast;
   // Unknown adjustment subclass — caller treats 0 as an error sentinel.
   return 0;
 }
@@ -168,6 +172,41 @@ bool readCurvesDescriptor(std::ifstream& in, CurvesAdjustment& layer) {
     }
   }
   layer.setAllPoints(all);
+  return true;
+}
+
+bool writeHueSaturationDescriptor(std::ofstream& out,
+                                   const HueSaturation& layer) {
+  const HueSaturationParams& p = layer.params();
+  if (!writeRaw(out, p.hueShift)) return false;
+  if (!writeRaw(out, p.saturation)) return false;
+  if (!writeRaw(out, p.lightness)) return false;
+  return out.good();
+}
+
+bool readHueSaturationDescriptor(std::ifstream& in, HueSaturation& layer) {
+  HueSaturationParams p{};
+  if (!readRaw(in, p.hueShift)) return false;
+  if (!readRaw(in, p.saturation)) return false;
+  if (!readRaw(in, p.lightness)) return false;
+  layer.setParams(p);
+  return true;
+}
+
+bool writeBrightnessContrastDescriptor(std::ofstream& out,
+                                        const BrightnessContrast& layer) {
+  const BrightnessContrastParams& p = layer.params();
+  if (!writeRaw(out, p.brightness)) return false;
+  if (!writeRaw(out, p.contrast)) return false;
+  return out.good();
+}
+
+bool readBrightnessContrastDescriptor(std::ifstream& in,
+                                       BrightnessContrast& layer) {
+  BrightnessContrastParams p{};
+  if (!readRaw(in, p.brightness)) return false;
+  if (!readRaw(in, p.contrast)) return false;
+  layer.setParams(p);
   return true;
 }
 
@@ -257,6 +296,18 @@ bool saveTxl(const std::string& path, const Document& doc, std::string* err) {
         const auto* cv = dynamic_cast<const CurvesAdjustment*>(layer);
         if (!cv || !writeCurvesDescriptor(out, *cv)) {
           setErr(err, "Failed writing Curves descriptor");
+          return false;
+        }
+      } else if (kind == kLayerKindHueSaturation) {
+        const auto* hs = dynamic_cast<const HueSaturation*>(layer);
+        if (!hs || !writeHueSaturationDescriptor(out, *hs)) {
+          setErr(err, "Failed writing Hue/Saturation descriptor");
+          return false;
+        }
+      } else if (kind == kLayerKindBrightnessContrast) {
+        const auto* bc = dynamic_cast<const BrightnessContrast*>(layer);
+        if (!bc || !writeBrightnessContrastDescriptor(out, *bc)) {
+          setErr(err, "Failed writing Brightness/Contrast descriptor");
           return false;
         }
       } else {
@@ -444,11 +495,26 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
           return std::nullopt;
         }
         layer = std::move(cv);
+      } else if (kind == kLayerKindHueSaturation) {
+        auto hs = std::make_unique<HueSaturation>();
+        if (!readHueSaturationDescriptor(in, *hs)) {
+          setErr(err, "Failed reading Hue/Saturation descriptor");
+          return std::nullopt;
+        }
+        layer = std::move(hs);
+      } else if (kind == kLayerKindBrightnessContrast) {
+        auto bc = std::make_unique<BrightnessContrast>();
+        if (!readBrightnessContrastDescriptor(in, *bc)) {
+          setErr(err, "Failed reading Brightness/Contrast descriptor");
+          return std::nullopt;
+        }
+        layer = std::move(bc);
       } else {
-        // Reserved kinds (HueSat, B&C) are format-valid but no subclass
-        // yet exists to materialize them. Fail cleanly.
+        // Defensive: unreachable given the `isAdjustmentKind` gate above,
+        // but keep the error path so future kinds fail cleanly if the
+        // header gate is extended before the reader.
         setErr(err, "Adjustment kind " + std::to_string(kind) +
-                        " is reserved but not yet implemented");
+                        " has no reader");
         return std::nullopt;
       }
     }

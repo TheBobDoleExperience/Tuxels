@@ -13,7 +13,9 @@
 #include "core/TuxImage.h"
 #include "geom/Spline.h"
 #include "io/TxlIO.h"
+#include "layers/BrightnessContrast.h"
 #include "layers/CurvesAdjustment.h"
+#include "layers/HueSaturation.h"
 #include "layers/LayerMask.h"
 #include "layers/LevelsAdjustment.h"
 #include "layers/PixelLayer.h"
@@ -442,6 +444,72 @@ TEST(txl_v3_round_trip_preserves_curves_adjustment) {
   CHECK_EQ(static_cast<int>(blue.size()), 5);
   CHECK_NEAR(blue[0].y, 0.05f, 1e-6f);
   CHECK_NEAR(blue[4].y, 0.95f, 1e-6f);
+}
+
+TEST(txl_v3_round_trip_preserves_brightness_contrast_adjustment) {
+  const std::string path = tmpPath("bc");
+  PathGuard g{path};
+
+  Document src(48, 32);
+  src.addBlankPixelLayer("BG");
+  auto* bc = src.addAdjustmentLayer(std::make_unique<BrightnessContrast>());
+  bc->name = "B&C 1";
+  bc->opacity = 0.8f;
+  bc->blend = BlendMode::Normal;
+  auto* bcTyped = dynamic_cast<BrightnessContrast*>(bc);
+  CHECK(bcTyped != nullptr);
+  bcTyped->setParams({0.3f, -0.2f});
+
+  std::string err;
+  CHECK(saveTxl(path, src, &err));
+  auto loaded = loadTxl(path, &err);
+  CHECK(loaded.has_value());
+  CHECK_EQ(static_cast<int>((*loaded)->tree().size()), 2);
+
+  auto* loadedBc = dynamic_cast<BrightnessContrast*>((*loaded)->tree().at(1));
+  CHECK(loadedBc != nullptr);
+  CHECK(loadedBc->name == "B&C 1");
+  CHECK_NEAR(loadedBc->opacity, 0.8f, 1e-6f);
+  CHECK_NEAR(loadedBc->params().brightness, 0.3f, 1e-6f);
+  CHECK_NEAR(loadedBc->params().contrast, -0.2f, 1e-6f);
+
+  // addAdjustmentLayer auto-attaches a doc-sized white mask.
+  CHECK(loadedBc->mask != nullptr);
+  CHECK_EQ(loadedBc->mask->image.width(), 48);
+  CHECK_EQ(loadedBc->mask->image.height(), 32);
+}
+
+TEST(txl_v3_round_trip_preserves_hue_saturation_adjustment) {
+  const std::string path = tmpPath("hs");
+  PathGuard g{path};
+
+  Document src(64, 48);
+  src.addBlankPixelLayer("BG");
+  auto* hs = src.addAdjustmentLayer(std::make_unique<HueSaturation>());
+  hs->name = "Hue/Sat 1";
+  hs->opacity = 0.55f;
+  hs->blend = BlendMode::Multiply;
+  auto* hsTyped = dynamic_cast<HueSaturation*>(hs);
+  CHECK(hsTyped != nullptr);
+  hsTyped->setParams({-60.f, 0.4f, -0.15f});
+
+  std::string err;
+  CHECK(saveTxl(path, src, &err));
+  auto loaded = loadTxl(path, &err);
+  CHECK(loaded.has_value());
+
+  auto* loadedHs = dynamic_cast<HueSaturation*>((*loaded)->tree().at(1));
+  CHECK(loadedHs != nullptr);
+  CHECK(loadedHs->name == "Hue/Sat 1");
+  CHECK_NEAR(loadedHs->opacity, 0.55f, 1e-6f);
+  CHECK(loadedHs->blend == BlendMode::Multiply);
+  CHECK_NEAR(loadedHs->params().hueShift, -60.f, 1e-6f);
+  CHECK_NEAR(loadedHs->params().saturation, 0.4f, 1e-6f);
+  CHECK_NEAR(loadedHs->params().lightness, -0.15f, 1e-6f);
+
+  CHECK(loadedHs->mask != nullptr);
+  CHECK_EQ(loadedHs->mask->image.width(), 64);
+  CHECK_EQ(loadedHs->mask->image.height(), 48);
 }
 
 TEST(txl_v3_round_trip_preserves_mixed_layer_ordering) {

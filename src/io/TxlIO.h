@@ -41,8 +41,8 @@ class Document;
 //                       1 = PixelLayer
 //                       2 = LevelsAdjustment      (v3+)
 //                       3 = CurvesAdjustment      (v3+)
-//                       4 = HueSaturation         (reserved for S6)
-//                       5 = BrightnessContrast    (reserved for S6)
+//                       4 = HueSaturation         (v3+)
+//                       5 = BrightnessContrast    (v3+)
 //     Visible       : uint8
 //     MaskEnabled   : uint8
 //     HasMask       : uint8
@@ -68,6 +68,10 @@ class Document;
 //       CurvesDescriptor : per channel (Composite/R/G/B):
 //                            NumPoints : uint32
 //                            Points    : { float32 x, float32 y }[NumPoints]
+//     If Kind == HueSaturation:
+//       HueSatDescriptor : { float32 hueShift, saturation, lightness } = 12 B
+//     If Kind == BrightnessContrast:
+//       BCDescriptor     : { float32 brightness, contrast } = 8 B
 //     NumMaskTiles  : uint32   (always 0 when HasMask is false)
 //       For each mask tile: TileRecord
 //
