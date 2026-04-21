@@ -25,6 +25,7 @@
 #include "history/UndoStack.h"
 #include "io/PngIO.h"
 #include "io/TxlIO.h"
+#include "layers/CurvesAdjustment.h"
 #include "layers/LayerMask.h"
 #include "layers/LevelsAdjustment.h"
 #include "layers/PixelLayer.h"
@@ -39,6 +40,7 @@
 #include "tools/SelectByColorTool.h"
 #include "tools/TransformTool.h"
 #include "ui/CanvasView.h"
+#include "ui/CurvesDialog.h"
 #include "ui/LayersPanel.h"
 #include "ui/LevelsDialog.h"
 #include "ui/ToolsPanel.h"
@@ -143,6 +145,10 @@ void MainWindow::buildMenus() {
   addLevelsAct->setShortcut(QKeySequence(tr("Ctrl+L")));
   connect(addLevelsAct, &QAction::triggered, this,
           &MainWindow::onLayerAddLevels);
+  auto* addCurvesAct = adjMenu->addAction(tr("&Curves…"));
+  addCurvesAct->setShortcut(QKeySequence(tr("Ctrl+M")));
+  connect(addCurvesAct, &QAction::triggered, this,
+          &MainWindow::onLayerAddCurves);
 
   auto* selectMenu = mb->addMenu(tr("&Select"));
   auto* selectAllAct = selectMenu->addAction(tr("&All"));
@@ -1072,13 +1078,64 @@ void MainWindow::onLayerAddLevels() {
   }
 }
 
+void MainWindow::onLayerAddCurves() {
+  if (!doc_) return;
+
+  TuxImage preview(doc_->width(), doc_->height());
+  compose(doc_->tree(), preview);
+  Histogram4x256 hist = computeHistogram(preview, doc_->selection());
+
+  auto layer = std::make_unique<CurvesAdjustment>();
+  layer->name = "Curves";
+  const PaintTarget prevPaintTarget = doc_->paintTarget();
+  const int prevActive = doc_->activeLayerIndex();
+
+  CurvesAdjustment* raw = doc_->addAdjustmentLayer(std::move(layer));
+  layersPanel_->refresh();
+  canvas_->requestRecomposite();
+
+  CurvesDialog dlg(raw, hist, this);
+  connect(&dlg, &CurvesDialog::previewChanged, this,
+          [this]() { canvas_->requestRecomposite(); });
+
+  if (dlg.exec() == QDialog::Accepted) {
+    const std::size_t idx = doc_->tree().size() - 1;
+    auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
+        doc_->tree().removeAt(idx));
+    const int priorActive = prevActive;
+
+    auto doIt = [this, stash, idx]() mutable {
+      if (!*stash) return;
+      doc_->tree().insertAt(idx, std::move(*stash));
+      doc_->setActiveLayerIndex(static_cast<int>(idx));
+      doc_->setPaintTarget(PaintTarget::Mask);
+      refreshAfterUndoRedo();
+    };
+    auto undoIt = [this, stash, idx, priorActive, prevPaintTarget]() mutable {
+      *stash = doc_->tree().removeAt(idx);
+      doc_->setActiveLayerIndex(priorActive);
+      doc_->setPaintTarget(prevPaintTarget);
+      refreshAfterUndoRedo();
+    };
+
+    doIt();
+    undoStack_->push(std::make_unique<LayerOpCommand>(
+        "Add Curves Adjustment", std::move(doIt), std::move(undoIt)));
+  } else {
+    doc_->tree().removeAt(doc_->tree().size() - 1);
+    doc_->setActiveLayerIndex(prevActive);
+    doc_->setPaintTarget(prevPaintTarget);
+    layersPanel_->refresh();
+    canvas_->requestRecomposite();
+  }
+}
+
 void MainWindow::onEditAdjustmentRequested(LayerBase* layer) {
   if (!doc_ || !layer) return;
-  auto* levels = dynamic_cast<LevelsAdjustment*>(layer);
-  if (!levels) return;
 
   // Rebuild the histogram from the composite *below* this layer: temporarily
-  // hide the layer + all layers above it before composing.
+  // hide the layer + all layers above it before composing. Shared prep for
+  // every adjustment-type branch below.
   std::vector<bool> saved;
   saved.reserve(doc_->tree().size());
   bool pastLayer = false;
@@ -1095,24 +1152,43 @@ void MainWindow::onEditAdjustmentRequested(LayerBase* layer) {
   }
   Histogram4x256 hist = computeHistogram(preview, doc_->selection());
 
-  using ParamArr = std::array<LevelsParams, 4>;
-  LevelsDialog dlg(levels, hist, this);
-  const ParamArr before = dlg.paramsBefore();
-  connect(&dlg, &LevelsDialog::previewChanged, this,
-          [this]() { canvas_->requestRecomposite(); });
-
-  if (dlg.exec() == QDialog::Accepted) {
-    const ParamArr after = levels->allParams();
-    auto setter = [](LevelsAdjustment* l, const ParamArr& p) {
-      l->setAllParams(p);
-    };
-    auto cmd = std::make_unique<LayerParamsCommand<LevelsAdjustment, ParamArr>>(
-        levels, before, after, setter, "Edit Levels");
-    undoStack_->push(std::move(cmd));
-    canvas_->requestRecomposite();
+  if (auto* levels = dynamic_cast<LevelsAdjustment*>(layer)) {
+    using ParamArr = std::array<LevelsParams, 4>;
+    LevelsDialog dlg(levels, hist, this);
+    const ParamArr before = dlg.paramsBefore();
+    connect(&dlg, &LevelsDialog::previewChanged, this,
+            [this]() { canvas_->requestRecomposite(); });
+    if (dlg.exec() == QDialog::Accepted) {
+      const ParamArr after = levels->allParams();
+      auto setter = [](LevelsAdjustment* l, const ParamArr& p) {
+        l->setAllParams(p);
+      };
+      undoStack_->push(
+          std::make_unique<LayerParamsCommand<LevelsAdjustment, ParamArr>>(
+              levels, before, after, setter, "Edit Levels"));
+      canvas_->requestRecomposite();
+    }
+    return;
   }
-  // On reject the dialog has already restored `before` via its own reject()
-  // override and emitted previewChanged → the canvas is back to pre-edit.
+
+  if (auto* curves = dynamic_cast<CurvesAdjustment*>(layer)) {
+    using PtArr = CurvesAdjustment::PointsArray;
+    CurvesDialog dlg(curves, hist, this);
+    const PtArr before = dlg.pointsBefore();
+    connect(&dlg, &CurvesDialog::previewChanged, this,
+            [this]() { canvas_->requestRecomposite(); });
+    if (dlg.exec() == QDialog::Accepted) {
+      const PtArr after = curves->allPoints();
+      auto setter = [](CurvesAdjustment* l, const PtArr& p) {
+        l->setAllPoints(p);
+      };
+      undoStack_->push(
+          std::make_unique<LayerParamsCommand<CurvesAdjustment, PtArr>>(
+              curves, before, after, setter, "Edit Curves"));
+      canvas_->requestRecomposite();
+    }
+    return;
+  }
 }
 
 void MainWindow::onBrushSizeIncrease() {

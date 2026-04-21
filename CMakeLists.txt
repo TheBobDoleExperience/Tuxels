@@ -23,6 +23,7 @@ add_compile_options(-Wall -Wextra -Wpedantic -Werror=return-type)
 set(TUXELS_CORE_SOURCES
   src/core/Histogram.cpp
   src/core/SelectionMask.cpp
+  src/layers/CurvesAdjustment.cpp
   src/layers/LevelsAdjustment.cpp
   src/layers/PixelLayer.cpp
   src/compositor/compose.cpp
@@ -30,6 +31,7 @@ set(TUXELS_CORE_SOURCES
   src/brush/BrushEngine.cpp
   src/fill/FloodFill.cpp
   src/geom/Resample.cpp
+  src/geom/Spline.cpp
   src/history/CropCommand.cpp
   src/history/MoveLayerCommand.cpp
   src/history/TransformCommand.cpp
@@ -65,6 +67,8 @@ add_executable(tuxels
   src/ui/LayerRowWidget.cpp
   src/ui/LayersPanel.h
   src/ui/LayersPanel.cpp
+  src/ui/CurvesDialog.h
+  src/ui/CurvesDialog.cpp
   src/ui/LevelsDialog.h
   src/ui/LevelsDialog.cpp
   src/ui/ToolsPanel.h
@@ -115,7 +119,9 @@ tuxels_add_test(test_select_by_color)
 tuxels_add_test(test_brush_dynamics)
 tuxels_add_test(test_adjustment_layer)
 tuxels_add_test(test_histogram)
+tuxels_add_test(test_curves)
 tuxels_add_test(test_levels)
+tuxels_add_test(test_spline)
 
 add_executable(test_png_io tests/test_png_io.cpp)
 set_target_properties(test_png_io PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)

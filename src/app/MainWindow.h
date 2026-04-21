@@ -42,6 +42,7 @@ class MainWindow : public QMainWindow {
   void onEditRedo();
   void onLayerAdd();
   void onLayerAddLevels();
+  void onLayerAddCurves();
   void onLayerDelete();
   void onLayerMoveUp();
   void onLayerMoveDown();
