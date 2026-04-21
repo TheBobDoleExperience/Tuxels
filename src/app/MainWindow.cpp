@@ -14,8 +14,10 @@
 #include "compositor/compose.h"
 #include "core/Document.h"
 #include "core/SelectionMask.h"
+#include "core/Histogram.h"
 #include "history/CropCommand.h"
 #include "history/LayerOpCommand.h"
+#include "history/LayerParamsCommand.h"
 #include "history/MoveLayerCommand.h"
 #include "history/PaintCommand.h"
 #include "history/SelectionCommand.h"
@@ -24,6 +26,7 @@
 #include "io/PngIO.h"
 #include "io/TxlIO.h"
 #include "layers/LayerMask.h"
+#include "layers/LevelsAdjustment.h"
 #include "layers/PixelLayer.h"
 #include "tools/BrushTool.h"
 #include "tools/BucketTool.h"
@@ -37,6 +40,7 @@
 #include "tools/TransformTool.h"
 #include "ui/CanvasView.h"
 #include "ui/LayersPanel.h"
+#include "ui/LevelsDialog.h"
 #include "ui/ToolsPanel.h"
 
 namespace tuxels {
@@ -132,6 +136,13 @@ void MainWindow::buildMenus() {
   connect(addMaskAct, &QAction::triggered, this, &MainWindow::onAddLayerMask);
   auto* delMaskAct = layerMenu->addAction(tr("D&elete Layer Mask"));
   connect(delMaskAct, &QAction::triggered, this, &MainWindow::onDeleteLayerMask);
+
+  layerMenu->addSeparator();
+  auto* adjMenu = layerMenu->addMenu(tr("New &Adjustment Layer"));
+  auto* addLevelsAct = adjMenu->addAction(tr("&Levels…"));
+  addLevelsAct->setShortcut(QKeySequence(tr("Ctrl+L")));
+  connect(addLevelsAct, &QAction::triggered, this,
+          &MainWindow::onLayerAddLevels);
 
   auto* selectMenu = mb->addMenu(tr("&Select"));
   auto* selectAllAct = selectMenu->addAction(tr("&All"));
@@ -1001,9 +1012,107 @@ void MainWindow::onLayerDeleteMaskRequest(LayerBase* layer) {
                                                     std::move(undoIt)));
 }
 
-void MainWindow::onEditAdjustmentRequested(LayerBase* /*layer*/) {
-  // Stub for M3-S0. Wired up in S2 (Levels dialog) / S3 (Curves) / S6
-  // (Hue/Sat, Brightness/Contrast) once the dialog classes exist.
+void MainWindow::onLayerAddLevels() {
+  if (!doc_) return;
+
+  // Compose the current doc into a temp image so the dialog can render a
+  // histogram of "what's about to be adjusted". Matches PS: the backdrop
+  // reflects the composite below the new adjustment's insert position.
+  TuxImage preview(doc_->width(), doc_->height());
+  compose(doc_->tree(), preview);
+  Histogram4x256 hist = computeHistogram(preview, doc_->selection());
+
+  auto layer = std::make_unique<LevelsAdjustment>();
+  layer->name = "Levels";
+  const PaintTarget prevPaintTarget = doc_->paintTarget();
+  const int prevActive = doc_->activeLayerIndex();
+
+  // Insert with identity params so live preview has something to act on.
+  LevelsAdjustment* raw = doc_->addAdjustmentLayer(std::move(layer));
+  layersPanel_->refresh();
+  canvas_->requestRecomposite();
+
+  LevelsDialog dlg(raw, hist, this);
+  connect(&dlg, &LevelsDialog::previewChanged, this,
+          [this]() { canvas_->requestRecomposite(); });
+
+  if (dlg.exec() == QDialog::Accepted) {
+    // Pop the configured layer out of the tree, stash it, and push a
+    // LayerOpCommand whose doIt re-inserts it. Mirrors `onLayerAdd` so
+    // undo/redo share the add/remove closures.
+    const std::size_t idx = doc_->tree().size() - 1;
+    auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
+        doc_->tree().removeAt(idx));
+    const int priorActive = prevActive;
+
+    auto doIt = [this, stash, idx]() mutable {
+      if (!*stash) return;
+      doc_->tree().insertAt(idx, std::move(*stash));
+      doc_->setActiveLayerIndex(static_cast<int>(idx));
+      doc_->setPaintTarget(PaintTarget::Mask);
+      refreshAfterUndoRedo();
+    };
+    auto undoIt = [this, stash, idx, priorActive, prevPaintTarget]() mutable {
+      *stash = doc_->tree().removeAt(idx);
+      doc_->setActiveLayerIndex(priorActive);
+      doc_->setPaintTarget(prevPaintTarget);
+      refreshAfterUndoRedo();
+    };
+
+    doIt();
+    undoStack_->push(std::make_unique<LayerOpCommand>(
+        "Add Levels Adjustment", std::move(doIt), std::move(undoIt)));
+  } else {
+    // Cancel: remove the layer, restore prior active index and paint target.
+    doc_->tree().removeAt(doc_->tree().size() - 1);
+    doc_->setActiveLayerIndex(prevActive);
+    doc_->setPaintTarget(prevPaintTarget);
+    layersPanel_->refresh();
+    canvas_->requestRecomposite();
+  }
+}
+
+void MainWindow::onEditAdjustmentRequested(LayerBase* layer) {
+  if (!doc_ || !layer) return;
+  auto* levels = dynamic_cast<LevelsAdjustment*>(layer);
+  if (!levels) return;
+
+  // Rebuild the histogram from the composite *below* this layer: temporarily
+  // hide the layer + all layers above it before composing.
+  std::vector<bool> saved;
+  saved.reserve(doc_->tree().size());
+  bool pastLayer = false;
+  for (std::size_t i = 0; i < doc_->tree().size(); ++i) {
+    LayerBase* l = doc_->tree().at(i);
+    saved.push_back(l->visible);
+    if (l == layer) pastLayer = true;
+    if (pastLayer) l->visible = false;
+  }
+  TuxImage preview(doc_->width(), doc_->height());
+  compose(doc_->tree(), preview);
+  for (std::size_t i = 0; i < doc_->tree().size(); ++i) {
+    doc_->tree().at(i)->visible = saved[i];
+  }
+  Histogram4x256 hist = computeHistogram(preview, doc_->selection());
+
+  using ParamArr = std::array<LevelsParams, 4>;
+  LevelsDialog dlg(levels, hist, this);
+  const ParamArr before = dlg.paramsBefore();
+  connect(&dlg, &LevelsDialog::previewChanged, this,
+          [this]() { canvas_->requestRecomposite(); });
+
+  if (dlg.exec() == QDialog::Accepted) {
+    const ParamArr after = levels->allParams();
+    auto setter = [](LevelsAdjustment* l, const ParamArr& p) {
+      l->setAllParams(p);
+    };
+    auto cmd = std::make_unique<LayerParamsCommand<LevelsAdjustment, ParamArr>>(
+        levels, before, after, setter, "Edit Levels");
+    undoStack_->push(std::move(cmd));
+    canvas_->requestRecomposite();
+  }
+  // On reject the dialog has already restored `before` via its own reject()
+  // override and emitted previewChanged → the canvas is back to pre-edit.
 }
 
 void MainWindow::onBrushSizeIncrease() {
