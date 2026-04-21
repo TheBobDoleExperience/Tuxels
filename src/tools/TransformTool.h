@@ -46,6 +46,9 @@ class TransformTool : public ToolBase {
     // Corners in doc-space, order TL, TR, BR, BL. Used by CanvasView to
     // draw the bbox + handle dots.
     std::array<std::array<float, 2>, 4> corners{};
+    // Rotation/scale pivot in doc-space. CanvasView paints a crosshair here
+    // when `active` is true.
+    std::array<float, 2> pivot{};
   };
 
   TransformTool() = default;
@@ -66,6 +69,8 @@ class TransformTool : public ToolBase {
   float scaleX() const noexcept { return scaleX_; }
   float scaleY() const noexcept { return scaleY_; }
   float rotation() const noexcept { return angle_; }
+  float pivotX() const noexcept { return pivotX_; }
+  float pivotY() const noexcept { return pivotY_; }
 
   Overlay overlay() const;
 
@@ -81,7 +86,7 @@ class TransformTool : public ToolBase {
   std::optional<float> cursorRadiusPx() const override { return std::nullopt; }
 
  private:
-  enum class DragMode { None, Translate, Rotate, Scale };
+  enum class DragMode { None, Translate, Rotate, Scale, Pivot };
 
   void rebuildScratch();
   void markWholeDocDirty(const Document& doc);
@@ -104,6 +109,11 @@ class TransformTool : public ToolBase {
   float scaleX_ = 1.f;
   float scaleY_ = 1.f;
   float angle_ = 0.f;
+  // Rotation + scale pivot in doc-space. Initialized to the bbox center on
+  // `enter`, tracks along with `centerX_/Y_` on translate, and can be moved
+  // independently via the pivot drag gesture.
+  float pivotX_ = 0.f;
+  float pivotY_ = 0.f;
 
   // Scratch preview + its doc-space origin.
   TuxImage scratch_;
@@ -121,6 +131,12 @@ class TransformTool : public ToolBase {
   float dragStartAngle_ = 0.f;
   float dragStartScaleX_ = 1.f;
   float dragStartScaleY_ = 1.f;
+  float dragStartPivotX_ = 0.f;
+  float dragStartPivotY_ = 0.f;
+  // For Scale drags: the grabbed corner's pre-scale local coords at drag
+  // start (pre-rotation frame, relative to pivot). newScale = u / dragStartLocal.
+  float dragStartLocalX_ = 0.f;
+  float dragStartLocalY_ = 0.f;
 
   Rect dirty_;
   int docW_ = 0;

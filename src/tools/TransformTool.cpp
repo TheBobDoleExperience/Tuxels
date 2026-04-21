@@ -16,12 +16,27 @@ namespace {
 // Fixed for M2; future zoom-aware UI can override via CanvasView.
 constexpr float kCornerHitRadius = 10.f;
 
-Affine2D buildSrcToDoc(float centerX, float centerY, float scaleX,
-                       float scaleY, float angle, int srcW, int srcH) {
+// Doc-pixel radius for the pivot dot hit-test. Tested before corner so a
+// click that lands inside the corner hit region but closer to the pivot (e.g.
+// pivot moved onto a corner) still grabs the pivot.
+constexpr float kPivotHitRadius = 8.f;
+
+// 15° snap step used for Shift-rotate.
+constexpr float kRotateSnapStep = 0.26179938779914943653855361527329f;  // π/12
+
+// src→doc affine. Scale + rotation are centered on the pivot (px, py); the
+// intermediate `translate(cx-px, cy-py)` re-inserts the offset between bbox
+// center and pivot so that when `pivot == center` the transform reduces to
+// the identity-pivot form `translate(-sw/2,-sh/2) · scale · rotate ·
+// translate(cx, cy)`.
+Affine2D buildSrcToDoc(float centerX, float centerY, float pivotX, float pivotY,
+                       float scaleX, float scaleY, float angle, int srcW,
+                       int srcH) {
   return Affine2D::translation(-srcW * 0.5f, -srcH * 0.5f)
+      .then(Affine2D::translation(centerX - pivotX, centerY - pivotY))
       .then(Affine2D::scaling(scaleX, scaleY))
       .then(Affine2D::rotation(angle))
-      .then(Affine2D::translation(centerX, centerY));
+      .then(Affine2D::translation(pivotX, pivotY));
 }
 
 }  // namespace
@@ -44,6 +59,8 @@ bool TransformTool::enter(Document& doc) {
   scaleX_ = 1.f;
   scaleY_ = 1.f;
   angle_ = 0.f;
+  pivotX_ = centerX_;
+  pivotY_ = centerY_;
   docW_ = doc.width();
   docH_ = doc.height();
   dragging_ = false;
@@ -87,8 +104,12 @@ std::optional<TransformTool::PendingCommit> TransformTool::commit() {
 
 void TransformTool::setTranslation(float cx, float cy) {
   if (!active_) return;
+  const float dx = cx - centerX_;
+  const float dy = cy - centerY_;
   centerX_ = cx;
   centerY_ = cy;
+  pivotX_ += dx;
+  pivotY_ += dy;
   rebuildScratch();
 }
 
@@ -108,8 +129,8 @@ void TransformTool::setRotation(float radians) {
 }
 
 std::array<std::array<float, 2>, 4> TransformTool::computeCorners() const {
-  const Affine2D m = buildSrcToDoc(centerX_, centerY_, scaleX_, scaleY_,
-                                    angle_, srcW_, srcH_);
+  const Affine2D m = buildSrcToDoc(centerX_, centerY_, pivotX_, pivotY_,
+                                    scaleX_, scaleY_, angle_, srcW_, srcH_);
   std::array<std::array<float, 2>, 4> c;
   const float fW = static_cast<float>(srcW_);
   const float fH = static_cast<float>(srcH_);
@@ -182,8 +203,9 @@ void TransformTool::rebuildScratch() {
   scratchOriginY_ = oy;
   scratch_ = TuxImage(w, h);
 
-  const Affine2D srcToDoc = buildSrcToDoc(centerX_, centerY_, scaleX_, scaleY_,
-                                           angle_, srcW_, srcH_);
+  const Affine2D srcToDoc = buildSrcToDoc(centerX_, centerY_, pivotX_, pivotY_,
+                                           scaleX_, scaleY_, angle_, srcW_,
+                                           srcH_);
   const Affine2D dstLocalToSrc =
       Affine2D::translation(static_cast<float>(ox), static_cast<float>(oy))
           .then(srcToDoc.inverse());
@@ -203,6 +225,7 @@ TransformTool::Overlay TransformTool::overlay() const {
     o.layer.originX = scratchOriginX_;
     o.layer.originY = scratchOriginY_;
     o.corners = computeCorners();
+    o.pivot = {pivotX_, pivotY_};
   }
   return o;
 }
@@ -210,15 +233,27 @@ TransformTool::Overlay TransformTool::overlay() const {
 void TransformTool::press(Document& doc, float x, float y, MouseButton btn) {
   if (!active_ || btn != MouseButton::Left) return;
 
-  const int corner = nearestCornerWithin(x, y, kCornerHitRadius);
-  const auto q = computeCorners();
+  // Pivot hit-test runs before corner so the pivot stays grabbable when it
+  // drifts close to a corner.
+  const float dpx = x - pivotX_;
+  const float dpy = y - pivotY_;
+  const bool hitPivot = (dpx * dpx + dpy * dpy) <=
+                        (kPivotHitRadius * kPivotHitRadius);
+
   DragMode mode;
-  if (corner >= 0) {
-    mode = DragMode::Scale;
-  } else if (pointInQuad(x, y, q)) {
-    mode = DragMode::Translate;
+  int corner = -1;
+  if (hitPivot) {
+    mode = DragMode::Pivot;
   } else {
-    mode = DragMode::Rotate;
+    corner = nearestCornerWithin(x, y, kCornerHitRadius);
+    const auto q = computeCorners();
+    if (corner >= 0) {
+      mode = DragMode::Scale;
+    } else if (pointInQuad(x, y, q)) {
+      mode = DragMode::Translate;
+    } else {
+      mode = DragMode::Rotate;
+    }
   }
 
   dragging_ = true;
@@ -231,6 +266,26 @@ void TransformTool::press(Document& doc, float x, float y, MouseButton btn) {
   dragStartAngle_ = angle_;
   dragStartScaleX_ = scaleX_;
   dragStartScaleY_ = scaleY_;
+  dragStartPivotX_ = pivotX_;
+  dragStartPivotY_ = pivotY_;
+
+  // For Scale: capture the grabbed corner's pre-scale local coords in the
+  // pre-rotation frame. `local = (src_corner - srcCenter) + (center - pivot)`.
+  // newScale = unrotated(cursor - pivot) / local.
+  if (mode == DragMode::Scale && corner >= 0) {
+    const float kx = dragStartCenterX_ - dragStartPivotX_ - srcW_ * 0.5f;
+    const float ky = dragStartCenterY_ - dragStartPivotY_ - srcH_ * 0.5f;
+    const float cornerOffsetX[4] = {0.f, static_cast<float>(srcW_),
+                                     static_cast<float>(srcW_), 0.f};
+    const float cornerOffsetY[4] = {0.f, 0.f, static_cast<float>(srcH_),
+                                     static_cast<float>(srcH_)};
+    dragStartLocalX_ = kx + cornerOffsetX[corner];
+    dragStartLocalY_ = ky + cornerOffsetY[corner];
+  } else {
+    dragStartLocalX_ = 0.f;
+    dragStartLocalY_ = 0.f;
+  }
+
   markWholeDocDirty(doc);
 }
 
@@ -238,46 +293,76 @@ void TransformTool::move(Document& doc, float x, float y) {
   if (!active_ || !dragging_) return;
   const float dx = x - dragStartX_;
   const float dy = y - dragStartY_;
+  const bool shift = (modifiers_ & Mod::Shift) != 0;
 
   switch (dragMode_) {
     case DragMode::Translate: {
       centerX_ = dragStartCenterX_ + dx;
       centerY_ = dragStartCenterY_ + dy;
+      // Pivot rides along with the whole transform on translate.
+      pivotX_ = dragStartPivotX_ + dx;
+      pivotY_ = dragStartPivotY_ + dy;
       break;
     }
     case DragMode::Rotate: {
-      const float a0 =
-          std::atan2(dragStartY_ - dragStartCenterY_, dragStartX_ - dragStartCenterX_);
-      const float a1 = std::atan2(y - dragStartCenterY_, x - dragStartCenterX_);
-      angle_ = dragStartAngle_ + (a1 - a0);
+      // Angle reference is the pivot (not the bbox center) so rotation
+      // feels anchored at the visible handle. Shift snaps the *delta*, so a
+      // drag that started at a non-multiple stays consistent.
+      const float a0 = std::atan2(dragStartY_ - dragStartPivotY_,
+                                   dragStartX_ - dragStartPivotX_);
+      const float a1 =
+          std::atan2(y - dragStartPivotY_, x - dragStartPivotX_);
+      float delta = a1 - a0;
+      if (shift) {
+        delta = std::round(delta / kRotateSnapStep) * kRotateSnapStep;
+      }
+      angle_ = dragStartAngle_ + delta;
       break;
     }
     case DragMode::Scale: {
       if (dragCorner_ < 0) break;
-      // Un-rotate the doc-space vector (cursor - center) back into the
-      // pre-rotation frame; the local corner in that frame is
-      // (±srcW/2, ±srcH/2) scaled by the current dragStartScale.
+      // Un-rotate the doc-space vector (cursor - pivot) back into the
+      // pre-rotation frame; divide by the grabbed corner's captured local
+      // coords to get the new per-axis scale.
       const float c = std::cos(dragStartAngle_);
       const float s = std::sin(dragStartAngle_);
-      const float vx = x - dragStartCenterX_;
-      const float vy = y - dragStartCenterY_;
-      // Inverse rotation: [c s; -s c].
+      const float vx = x - dragStartPivotX_;
+      const float vy = y - dragStartPivotY_;
       const float ux = c * vx + s * vy;
       const float uy = -s * vx + c * vy;
-      const float halfW = std::max(1.f, srcW_ * 0.5f);
-      const float halfH = std::max(1.f, srcH_ * 0.5f);
-      // Corner-to-local sign mapping: TL=(-,-) TR=(+,-) BR=(+,+) BL=(-,+).
-      const float signX = (dragCorner_ == 1 || dragCorner_ == 2) ? 1.f : -1.f;
-      const float signY = (dragCorner_ == 2 || dragCorner_ == 3) ? 1.f : -1.f;
-      float newSx = (ux * signX) / halfW;
-      float newSy = (uy * signY) / halfH;
+      constexpr float kMinLocal = 0.5f;
+      const float lx =
+          std::fabs(dragStartLocalX_) < kMinLocal
+              ? std::copysign(kMinLocal, dragStartLocalX_ == 0.f ? 1.f
+                                                               : dragStartLocalX_)
+              : dragStartLocalX_;
+      const float ly =
+          std::fabs(dragStartLocalY_) < kMinLocal
+              ? std::copysign(kMinLocal, dragStartLocalY_ == 0.f ? 1.f
+                                                               : dragStartLocalY_)
+              : dragStartLocalY_;
+      float newSx = ux / lx;
+      float newSy = uy / ly;
       constexpr float kMinScale = 0.01f;
       if (std::fabs(newSx) < kMinScale)
         newSx = (newSx < 0.f ? -kMinScale : kMinScale);
       if (std::fabs(newSy) < kMinScale)
         newSy = (newSy < 0.f ? -kMinScale : kMinScale);
+      if (shift) {
+        // Shift locks Y magnitude to X; Y sign is preserved so flipping
+        // across the pivot still works.
+        newSy = std::copysign(std::fabs(newSx), newSy);
+      }
       scaleX_ = newSx;
       scaleY_ = newSy;
+      break;
+    }
+    case DragMode::Pivot: {
+      // Pivot drag moves only `pivotX_/Y_`; scale/rotate/center are
+      // untouched. rebuildScratch picks up the new rotation center on the
+      // next mouse move after release.
+      pivotX_ = dragStartPivotX_ + dx;
+      pivotY_ = dragStartPivotY_ + dy;
       break;
     }
     case DragMode::None:

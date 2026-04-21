@@ -161,13 +161,15 @@ TEST(transform_press_inside_bbox_initiates_translate_drag) {
   addSolidLayer(doc, 40, 40, kGreen, 100, 100, "L");
   TransformTool t;
   t.enter(doc);
-  // Press at doc (120, 120) — bbox interior. Drag to (130, 135).
-  t.press(doc, 120.f, 120.f, MouseButton::Left);
-  t.move(doc, 130.f, 135.f);
+  // Press inside the bbox but outside the pivot hit radius (bbox=100-140,
+  // pivot at the center (120,120)). (110,110) is interior and clear of the
+  // 8-px pivot dot and the 10-px corner hit regions.
+  t.press(doc, 110.f, 110.f, MouseButton::Left);
+  t.move(doc, 120.f, 125.f);
   // Center started at (120, 120); after drag delta (+10, +15) → (130, 135).
   CHECK_NEAR(t.centerX(), 130.0, 1e-4);
   CHECK_NEAR(t.centerY(), 135.0, 1e-4);
-  t.release(doc, 130.f, 135.f, MouseButton::Left);
+  t.release(doc, 120.f, 125.f, MouseButton::Left);
 }
 
 TEST(transform_press_outside_bbox_initiates_rotate_drag) {
@@ -213,6 +215,105 @@ TEST(transform_commits_through_layer_override_preview) {
 // reverts to its pre-transform image once the overlay clears. This test
 // catches that by walking the full commit → TransformCommand → apply path
 // and asserting the layer image matches the transformed scratch.
+TEST(transform_shift_scale_locks_aspect_ratio) {
+  // Shift-held scale drag forces |scaleY| = |scaleX|. The Y sign is
+  // preserved so the user can still drag across the pivot to flip.
+  Document doc(400, 400);
+  addSolidLayer(doc, 40, 40, kGreen, 100, 100, "L");
+  TransformTool t;
+  t.enter(doc);
+  // Grab TR corner at (140, 100), drag to (160, 80).
+  // Without Shift: scaleX = 40/20 = 2, scaleY = -20/-20 = 1 (TR's local Y
+  // is negative, cursor moved up further → positive sy).
+  // With Shift: scaleY is locked to |scaleX| = 2, sign stays positive.
+  t.press(doc, 140.f, 100.f, MouseButton::Left);
+  t.setModifiers(Mod::Shift);
+  t.move(doc, 160.f, 80.f);
+  CHECK_NEAR(t.scaleX(), 2.0, 1e-4);
+  CHECK_NEAR(t.scaleY(), 2.0, 1e-4);
+  t.release(doc, 160.f, 80.f, MouseButton::Left);
+}
+
+TEST(transform_shift_scale_preserves_flip_sign) {
+  // Dragging TR *past* the pivot flips Y — Shift should not clobber that
+  // sign; it should only lock the magnitude.
+  Document doc(400, 400);
+  addSolidLayer(doc, 40, 40, kGreen, 100, 100, "L");
+  TransformTool t;
+  t.enter(doc);
+  // Grab TR at (140, 100), drag to (160, 140) — dy = +40. TR's local Y is
+  // -20 so sy = 40 / -20 = -2. Shift locks |sy| to |sx| = 2 but keeps sign.
+  t.press(doc, 140.f, 100.f, MouseButton::Left);
+  t.setModifiers(Mod::Shift);
+  t.move(doc, 160.f, 140.f);
+  CHECK_NEAR(t.scaleX(), 2.0, 1e-4);
+  CHECK_NEAR(t.scaleY(), -2.0, 1e-4);
+  t.release(doc, 160.f, 140.f, MouseButton::Left);
+}
+
+TEST(transform_shift_rotate_snaps_delta_to_15_degrees) {
+  Document doc(400, 400);
+  addSolidLayer(doc, 40, 40, kGreen, 100, 100, "L");
+  TransformTool t;
+  t.enter(doc);
+  // Press on +x axis of the pivot (120, 120) — rotate drag.
+  t.press(doc, 200.f, 120.f, MouseButton::Left);
+  t.setModifiers(Mod::Shift);
+  // Drag to ~16° around pivot — snap should pull it to exactly 15° (π/12).
+  const float targetAngle = 16.f * kPi / 180.f;
+  const float rx = 120.f + std::cos(targetAngle) * 80.f;
+  const float ry = 120.f + std::sin(targetAngle) * 80.f;
+  t.move(doc, rx, ry);
+  const float snap = kPi / 12.f;
+  CHECK_NEAR(t.rotation(), snap, 1e-4);
+  t.release(doc, rx, ry, MouseButton::Left);
+}
+
+TEST(transform_pivot_drag_moves_pivot_only) {
+  Document doc(400, 400);
+  addSolidLayer(doc, 40, 40, kGreen, 100, 100, "L");
+  TransformTool t;
+  t.enter(doc);
+  // Default pivot = bbox center = (120, 120). Press on the pivot dot, drag
+  // to (140, 140). Only the pivot should move; scale/rotate/center stay.
+  t.press(doc, 120.f, 120.f, MouseButton::Left);
+  t.move(doc, 140.f, 140.f);
+  CHECK_NEAR(t.pivotX(), 140.0, 1e-4);
+  CHECK_NEAR(t.pivotY(), 140.0, 1e-4);
+  CHECK_NEAR(t.scaleX(), 1.0, 1e-5);
+  CHECK_NEAR(t.scaleY(), 1.0, 1e-5);
+  CHECK_NEAR(t.rotation(), 0.0, 1e-5);
+  CHECK_NEAR(t.centerX(), 120.0, 1e-4);
+  CHECK_NEAR(t.centerY(), 120.0, 1e-4);
+  t.release(doc, 140.f, 140.f, MouseButton::Left);
+}
+
+TEST(transform_rotate_after_pivot_drag_pivots_around_new_center) {
+  Document doc(400, 400);
+  addSolidLayer(doc, 40, 40, kGreen, 100, 100, "L");
+  TransformTool t;
+  t.enter(doc);
+  // Move pivot from (120,120) to (140,140) — BR corner of the bbox.
+  t.press(doc, 120.f, 120.f, MouseButton::Left);
+  t.move(doc, 140.f, 140.f);
+  t.release(doc, 140.f, 140.f, MouseButton::Left);
+  // Rotate 90° about the new pivot. Press at (180, 120), drag to (160,
+  // 180) — vector (40,-20) rotated by +π/2 about the pivot equals (20,40).
+  t.press(doc, 180.f, 120.f, MouseButton::Left);
+  t.move(doc, 160.f, 180.f);
+  t.release(doc, 160.f, 180.f, MouseButton::Left);
+  CHECK_NEAR(t.rotation(), kPi / 2.0, 1e-3);
+  // TL corner at src=(0,0) should land at (180, 100) post-rotation about
+  // (140, 140): local=(-40,-40), R(π/2)·(-40,-40) = (40,-40), +pivot
+  // = (180, 100).
+  auto o = t.overlay();
+  CHECK(o.active);
+  CHECK_NEAR(o.corners[0][0], 180.0, 1e-3);
+  CHECK_NEAR(o.corners[0][1], 100.0, 1e-3);
+  CHECK_NEAR(o.pivot[0], 140.0, 1e-4);
+  CHECK_NEAR(o.pivot[1], 140.0, 1e-4);
+}
+
 TEST(transform_pending_commit_writes_through_apply) {
   Document doc(400, 400);
   auto* layer = addSolidLayer(doc, 40, 40, kGreen, 100, 100, "L");

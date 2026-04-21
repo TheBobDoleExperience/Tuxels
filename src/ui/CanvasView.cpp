@@ -643,6 +643,19 @@ void CanvasView::paintEvent(QPaintEvent*) {
         painter.setBrush(QColor(255, 255, 255, 240));
         painter.drawRect(h);
       }
+      // Pivot: a small circle with a crosshair through it, always drawn
+      // last so it sits on top of the bbox even when the pivot is on an
+      // edge or corner.
+      const QPointF pv = canvasToWidget(QPointF(ov.pivot[0], ov.pivot[1]));
+      const qreal pr = 5.0;
+      painter.setPen(QPen(QColor(0, 0, 0, 220), 1.0));
+      painter.setBrush(QColor(255, 255, 255, 240));
+      painter.drawEllipse(pv, pr, pr);
+      painter.setPen(QPen(QColor(0, 0, 0, 220), 1.0));
+      painter.drawLine(QPointF(pv.x() - pr - 2.0, pv.y()),
+                       QPointF(pv.x() + pr + 2.0, pv.y()));
+      painter.drawLine(QPointF(pv.x(), pv.y() - pr - 2.0),
+                       QPointF(pv.x(), pv.y() + pr + 2.0));
     }
   }
 }
@@ -722,6 +735,9 @@ void CanvasView::mouseMoveEvent(QMouseEvent* e) {
     std::optional<Rect> preRect = tool_->liveRect();
     std::optional<std::vector<Point2f>> prePath = tool_->livePath();
 
+    // Re-read modifiers on each move so Shift held mid-drag reaches the
+    // tool (transform aspect-lock, rotation snap, …).
+    tool_->setModifiers(translateModifiers(e->modifiers()));
     const QPointF ip = (QPointF(e->pos()) - pan_) / zoom_;
     tool_->move(*doc_, static_cast<float>(ip.x()),
                 static_cast<float>(ip.y()));
