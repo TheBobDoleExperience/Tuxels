@@ -10,7 +10,7 @@
 namespace tuxels {
 
 class Document;
-class PixelLayer;
+class LayerBase;
 
 // Paint-bucket tool. A single press triggers a scanline flood fill at the
 // cursor pixel on the active PixelLayer's paint target, clipped to the
@@ -51,10 +51,10 @@ class BucketTool : public ToolBase {
 
   // Handed to MainWindow so it can push a PaintCommand onto the undo stack.
   // `target` and `layer` are null when the last press was a no-op (e.g.
-  // clicked outside a valid PixelLayer, or on a pixel fully outside the
+  // clicked outside a valid paint target, or on a pixel fully outside the
   // selection).
   struct LastFill {
-    PixelLayer* layer = nullptr;
+    LayerBase* layer = nullptr;
     TuxImage* target = nullptr;
     Rect bounds;
     TuxImage::Recorded recorded;

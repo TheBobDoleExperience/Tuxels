@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "core/Document.h"
+#include "layers/LayerBase.h"
 #include "layers/LayerMask.h"
 #include "layers/PixelLayer.h"
 
@@ -10,13 +11,16 @@ namespace tuxels {
 
 void BucketTool::press(Document& doc, float x, float y, MouseButton btn) {
   if (btn != MouseButton::Left) return;
-  auto* px = dynamic_cast<PixelLayer*>(doc.activeLayer());
-  if (!px) return;
+  LayerBase* base = doc.activeLayer();
+  if (!base) return;
 
-  TuxImage* target = &px->image;
-  if (doc.paintTarget() == PaintTarget::Mask && px->mask) {
-    target = &px->mask->image;
+  TuxImage* target = nullptr;
+  if (doc.paintTarget() == PaintTarget::Mask && base->mask) {
+    target = &base->mask->image;
+  } else if (auto* px = dynamic_cast<PixelLayer*>(base)) {
+    target = &px->image;
   }
+  if (!target) return;
 
   const int sx = static_cast<int>(std::floor(x));
   const int sy = static_cast<int>(std::floor(y));
@@ -28,7 +32,7 @@ void BucketTool::press(Document& doc, float x, float y, MouseButton btn) {
 
   dirty_ = r.bounds;
   if (r.changed) {
-    last_ = LastFill{px, target, r.bounds, std::move(rec)};
+    last_ = LastFill{base, target, r.bounds, std::move(rec)};
   }
 }
 

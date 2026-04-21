@@ -1,5 +1,6 @@
 #include <memory>
 
+#include "brush/RoundBrush.h"
 #include "compositor/compose.h"
 #include "core/Document.h"
 #include "core/Pixel.h"
@@ -9,6 +10,8 @@
 #include "layers/LayerTree.h"
 #include "layers/PixelLayer.h"
 #include "test_harness.h"
+#include "tools/BrushTool.h"
+#include "tools/ToolBase.h"
 
 using namespace tuxels;
 
@@ -140,6 +143,39 @@ TEST(addAdjustmentLayer_auto_attaches_white_mask_and_flips_paint_target) {
   // Paint target flips to Mask so follow-up brushwork lands on the
   // auto-mask by default.
   CHECK(doc.paintTarget() == PaintTarget::Mask);
+}
+
+TEST(brush_paints_adjustment_layer_mask) {
+  // Regression: BrushTool and BucketTool used to dynamic_cast<PixelLayer*>
+  // on the active layer and silently bail if it failed. That made every
+  // adjustment layer's auto-attached mask unpaintable — clicks produced
+  // no stroke record and no mask-thumbnail update. Now that the tools
+  // route through LayerBase + paintTarget==Mask, brush strokes land on
+  // adjustment masks exactly like pixel-layer masks.
+  Document doc(32, 32);
+  auto inv = std::make_unique<InvertAdjustment>();
+  InvertAdjustment* adj = doc.addAdjustmentLayer(std::move(inv));
+  CHECK(adj != nullptr);
+  CHECK(doc.paintTarget() == PaintTarget::Mask);
+
+  BrushTool tool;
+  RoundBrushParams bp;
+  bp.diameter = 6;
+  bp.hardness = 1.f;
+  bp.opacity = 1.f;
+  bp.flow = 1.f;
+  bp.color = Rgba32F{0.f, 0.f, 0.f, 1.f};
+  tool.brush().setParams(bp);
+
+  tool.press(doc, 16.f, 16.f, MouseButton::Left);
+  tool.release(doc, 16.f, 16.f, MouseButton::Left);
+
+  auto stroke = tool.takeLastStroke();
+  CHECK(stroke.layer == adj);
+  CHECK(stroke.target == &adj->mask->image);
+  // Center of the stamp must no longer be pure white — the brush painted
+  // black into the mask.
+  CHECK(adj->mask->image.getPixel(16, 16).r < 0.5f);
 }
 
 int main() { return ::tuxels::testing::run(); }

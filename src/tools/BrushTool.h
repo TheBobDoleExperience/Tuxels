@@ -10,7 +10,7 @@
 namespace tuxels {
 
 class BrushEngine;
-class PixelLayer;
+class LayerBase;
 
 class BrushTool : public ToolBase {
  public:
@@ -29,8 +29,8 @@ class BrushTool : public ToolBase {
   }
 
   struct StrokeInfo {
-    PixelLayer* layer = nullptr;
-    TuxImage* target = nullptr;  // &layer->image or &layer->mask->image
+    LayerBase* layer = nullptr;
+    TuxImage* target = nullptr;  // pixel layer image, or any layer's mask image
     Rect bounds;
     TuxImage::Recorded recorded;
   };
@@ -43,7 +43,7 @@ class BrushTool : public ToolBase {
 
  private:
   RoundBrush brush_;
-  PixelLayer* active_ = nullptr;
+  LayerBase* active_ = nullptr;
   TuxImage* activeTarget_ = nullptr;
   std::unique_ptr<BrushEngine> engine_;
   StrokeInfo last_{};

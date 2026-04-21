@@ -2,6 +2,7 @@
 
 #include "brush/BrushEngine.h"
 #include "core/Document.h"
+#include "layers/LayerBase.h"
 #include "layers/LayerMask.h"
 #include "layers/PixelLayer.h"
 
@@ -12,13 +13,17 @@ BrushTool::~BrushTool() = default;
 
 void BrushTool::press(Document& doc, float x, float y, MouseButton btn) {
   if (btn != MouseButton::Left) return;
-  auto* px = dynamic_cast<PixelLayer*>(doc.activeLayer());
-  if (!px) return;
-  active_ = px;
-  activeTarget_ = &px->image;
-  if (doc.paintTarget() == PaintTarget::Mask && px->mask) {
-    activeTarget_ = &px->mask->image;
+  LayerBase* base = doc.activeLayer();
+  if (!base) return;
+  TuxImage* target = nullptr;
+  if (doc.paintTarget() == PaintTarget::Mask && base->mask) {
+    target = &base->mask->image;
+  } else if (auto* px = dynamic_cast<PixelLayer*>(base)) {
+    target = &px->image;
   }
+  if (!target) return;
+  active_ = base;
+  activeTarget_ = target;
   activeTarget_->beginRecord();
   engine_ = std::make_unique<BrushEngine>(brush_, *activeTarget_, doc.selection());
   engine_->beginStroke(x, y);
