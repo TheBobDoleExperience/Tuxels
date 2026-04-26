@@ -41,9 +41,7 @@
 #include "tools/PolyLassoTool.h"
 #include "tools/SelectByColorTool.h"
 #include "tools/TransformTool.h"
-#include "ui/BrightnessContrastDialog.h"
 #include "ui/CanvasView.h"
-#include "ui/HueSatDialog.h"
 #include "ui/LayersPanel.h"
 #include "ui/PropertiesDock.h"
 #include "ui/ToolsPanel.h"
@@ -377,6 +375,36 @@ void MainWindow::buildDocks() {
             undoStack_->push(
                 std::make_unique<LayerParamsCommand<CurvesAdjustment, PtArr>>(
                     layer, before, after, setter, "Edit Curves"));
+            if (canvas_) canvas_->requestRecomposite();
+          });
+  connect(propertiesDock_, &PropertiesDock::hueSatCommitRequested, this,
+          [this](HueSaturation* layer, HueSaturationParams before,
+                 HueSaturationParams after) {
+            if (!layer) return;
+            auto setter = [](HueSaturation* l, const HueSaturationParams& p) {
+              l->setParams(p);
+            };
+            undoStack_->push(
+                std::make_unique<
+                    LayerParamsCommand<HueSaturation, HueSaturationParams>>(
+                    layer, before, after, setter, "Edit Hue/Saturation"));
+            if (canvas_) canvas_->requestRecomposite();
+          });
+  connect(propertiesDock_, &PropertiesDock::brightnessContrastCommitRequested,
+          this,
+          [this](BrightnessContrast* layer,
+                 BrightnessContrastParams before,
+                 BrightnessContrastParams after) {
+            if (!layer) return;
+            auto setter = [](BrightnessContrast* l,
+                             const BrightnessContrastParams& p) {
+              l->setParams(p);
+            };
+            undoStack_->push(
+                std::make_unique<LayerParamsCommand<
+                    BrightnessContrast, BrightnessContrastParams>>(
+                    layer, before, after, setter,
+                    "Edit Brightness/Contrast"));
             if (canvas_) canvas_->requestRecomposite();
           });
 }
@@ -1113,9 +1141,15 @@ void MainWindow::bindActiveAdjustmentToDock() {
     propertiesDock_->bindCurves(curves, histogramBelow(curves));
     return;
   }
-  // Other adjustment kinds (H-S/B&C) get their dock panes in S4. Until
-  // then, leave the dock at empty state for those — the existing modal
-  // dialogs still open via `editAdjustmentRequested`.
+  if (auto* hs = dynamic_cast<HueSaturation*>(layer)) {
+    propertiesDock_->bindHueSat(hs);
+    return;
+  }
+  if (auto* bc = dynamic_cast<BrightnessContrast*>(layer)) {
+    propertiesDock_->bindBrightnessContrast(bc);
+    return;
+  }
+  // No adjustment kind matched — empty state.
   propertiesDock_->bindNothing();
 }
 
@@ -1226,41 +1260,32 @@ void MainWindow::onLayerAddBrightnessContrast() {
   layersPanel_->refresh();
   canvas_->requestRecomposite();
 
-  BrightnessContrastDialog dlg(raw, this);
-  connect(&dlg, &BrightnessContrastDialog::previewChanged, this,
-          [this]() { canvas_->requestRecomposite(); });
+  const std::size_t idx = doc_->tree().size() - 1;
+  auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
+      doc_->tree().removeAt(idx));
 
-  if (dlg.exec() == QDialog::Accepted) {
-    const std::size_t idx = doc_->tree().size() - 1;
-    auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
-        doc_->tree().removeAt(idx));
-    const int priorActive = prevActive;
-
-    auto doIt = [this, stash, idx]() mutable {
-      if (!*stash) return;
-      doc_->tree().insertAt(idx, std::move(*stash));
-      doc_->setActiveLayerIndex(static_cast<int>(idx));
-      doc_->setPaintTarget(PaintTarget::Mask);
-      refreshAfterUndoRedo();
-    };
-    auto undoIt = [this, stash, idx, priorActive, prevPaintTarget]() mutable {
-      *stash = doc_->tree().removeAt(idx);
-      doc_->setActiveLayerIndex(priorActive);
-      doc_->setPaintTarget(prevPaintTarget);
-      refreshAfterUndoRedo();
-    };
-
-    doIt();
-    undoStack_->push(std::make_unique<LayerOpCommand>(
-        "Add Brightness/Contrast Adjustment", std::move(doIt),
-        std::move(undoIt)));
-  } else {
-    doc_->tree().removeAt(doc_->tree().size() - 1);
+  auto doIt = [this, stash, idx]() mutable {
+    if (!*stash) return;
+    doc_->tree().insertAt(idx, std::move(*stash));
+    doc_->setActiveLayerIndex(static_cast<int>(idx));
+    doc_->setPaintTarget(PaintTarget::Mask);
+    refreshAfterUndoRedo();
+    bindActiveAdjustmentToDock();
+  };
+  auto undoIt = [this, stash, idx, prevActive, prevPaintTarget]() mutable {
+    *stash = doc_->tree().removeAt(idx);
     doc_->setActiveLayerIndex(prevActive);
     doc_->setPaintTarget(prevPaintTarget);
-    layersPanel_->refresh();
-    canvas_->requestRecomposite();
-  }
+    refreshAfterUndoRedo();
+    bindActiveAdjustmentToDock();
+  };
+
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>(
+      "Add Brightness/Contrast Adjustment", std::move(doIt),
+      std::move(undoIt)));
+  propertiesDock_->bindBrightnessContrast(raw);
+  propertiesDock_->raise();
 }
 
 void MainWindow::onLayerAddHueSaturation() {
@@ -1275,112 +1300,60 @@ void MainWindow::onLayerAddHueSaturation() {
   layersPanel_->refresh();
   canvas_->requestRecomposite();
 
-  HueSatDialog dlg(raw, this);
-  connect(&dlg, &HueSatDialog::previewChanged, this,
-          [this]() { canvas_->requestRecomposite(); });
+  const std::size_t idx = doc_->tree().size() - 1;
+  auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
+      doc_->tree().removeAt(idx));
 
-  if (dlg.exec() == QDialog::Accepted) {
-    const std::size_t idx = doc_->tree().size() - 1;
-    auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
-        doc_->tree().removeAt(idx));
-    const int priorActive = prevActive;
-
-    auto doIt = [this, stash, idx]() mutable {
-      if (!*stash) return;
-      doc_->tree().insertAt(idx, std::move(*stash));
-      doc_->setActiveLayerIndex(static_cast<int>(idx));
-      doc_->setPaintTarget(PaintTarget::Mask);
-      refreshAfterUndoRedo();
-    };
-    auto undoIt = [this, stash, idx, priorActive, prevPaintTarget]() mutable {
-      *stash = doc_->tree().removeAt(idx);
-      doc_->setActiveLayerIndex(priorActive);
-      doc_->setPaintTarget(prevPaintTarget);
-      refreshAfterUndoRedo();
-    };
-
-    doIt();
-    undoStack_->push(std::make_unique<LayerOpCommand>(
-        "Add Hue/Saturation Adjustment", std::move(doIt), std::move(undoIt)));
-  } else {
-    doc_->tree().removeAt(doc_->tree().size() - 1);
+  auto doIt = [this, stash, idx]() mutable {
+    if (!*stash) return;
+    doc_->tree().insertAt(idx, std::move(*stash));
+    doc_->setActiveLayerIndex(static_cast<int>(idx));
+    doc_->setPaintTarget(PaintTarget::Mask);
+    refreshAfterUndoRedo();
+    bindActiveAdjustmentToDock();
+  };
+  auto undoIt = [this, stash, idx, prevActive, prevPaintTarget]() mutable {
+    *stash = doc_->tree().removeAt(idx);
     doc_->setActiveLayerIndex(prevActive);
     doc_->setPaintTarget(prevPaintTarget);
-    layersPanel_->refresh();
-    canvas_->requestRecomposite();
-  }
+    refreshAfterUndoRedo();
+    bindActiveAdjustmentToDock();
+  };
+
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>(
+      "Add Hue/Saturation Adjustment", std::move(doIt), std::move(undoIt)));
+  propertiesDock_->bindHueSat(raw);
+  propertiesDock_->raise();
 }
 
 void MainWindow::onEditAdjustmentRequested(LayerBase* layer) {
   if (!doc_ || !layer) return;
 
-  // Rebuild the histogram from the composite *below* this layer: temporarily
-  // hide the layer + all layers above it before composing. Shared prep for
-  // every adjustment-type branch below.
-  std::vector<bool> saved;
-  saved.reserve(doc_->tree().size());
-  bool pastLayer = false;
-  for (std::size_t i = 0; i < doc_->tree().size(); ++i) {
-    LayerBase* l = doc_->tree().at(i);
-    saved.push_back(l->visible);
-    if (l == layer) pastLayer = true;
-    if (pastLayer) l->visible = false;
-  }
-  TuxImage preview(doc_->width(), doc_->height());
-  compose(doc_->tree(), preview);
-  for (std::size_t i = 0; i < doc_->tree().size(); ++i) {
-    doc_->tree().at(i)->visible = saved[i];
-  }
-  Histogram4x256 hist = computeHistogram(preview, doc_->selection());
-
   if (auto* levels = dynamic_cast<LevelsAdjustment*>(layer)) {
     // Properties dock takes the modal's place (M4-S2). bindLevels triggers
     // a snapshotBefore inside the pane, so the next slider release will
     // commit a `LayerParamsCommand` against the on-bind state.
-    propertiesDock_->bindLevels(levels, hist);
+    propertiesDock_->bindLevels(levels, histogramBelow(levels));
     propertiesDock_->raise();
     return;
   }
 
   if (auto* curves = dynamic_cast<CurvesAdjustment*>(layer)) {
-    propertiesDock_->bindCurves(curves, hist);
+    propertiesDock_->bindCurves(curves, histogramBelow(curves));
     propertiesDock_->raise();
     return;
   }
 
   if (auto* hs = dynamic_cast<HueSaturation*>(layer)) {
-    HueSatDialog dlg(hs, this);
-    const HueSaturationParams before = dlg.paramsBefore();
-    connect(&dlg, &HueSatDialog::previewChanged, this,
-            [this]() { canvas_->requestRecomposite(); });
-    if (dlg.exec() == QDialog::Accepted) {
-      const HueSaturationParams after = hs->params();
-      auto setter = [](HueSaturation* l, const HueSaturationParams& p) {
-        l->setParams(p);
-      };
-      undoStack_->push(std::make_unique<
-                       LayerParamsCommand<HueSaturation, HueSaturationParams>>(
-          hs, before, after, setter, "Edit Hue/Saturation"));
-      canvas_->requestRecomposite();
-    }
+    propertiesDock_->bindHueSat(hs);
+    propertiesDock_->raise();
     return;
   }
 
   if (auto* bc = dynamic_cast<BrightnessContrast*>(layer)) {
-    BrightnessContrastDialog dlg(bc, this);
-    const BrightnessContrastParams before = dlg.paramsBefore();
-    connect(&dlg, &BrightnessContrastDialog::previewChanged, this,
-            [this]() { canvas_->requestRecomposite(); });
-    if (dlg.exec() == QDialog::Accepted) {
-      const BrightnessContrastParams after = bc->params();
-      auto setter = [](BrightnessContrast* l,
-                       const BrightnessContrastParams& p) { l->setParams(p); };
-      undoStack_->push(
-          std::make_unique<LayerParamsCommand<BrightnessContrast,
-                                              BrightnessContrastParams>>(
-              bc, before, after, setter, "Edit Brightness/Contrast"));
-      canvas_->requestRecomposite();
-    }
+    propertiesDock_->bindBrightnessContrast(bc);
+    propertiesDock_->raise();
     return;
   }
 }

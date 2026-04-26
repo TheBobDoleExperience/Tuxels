@@ -225,3 +225,46 @@ Append-only. Never rewrite history. Dated entries in ISO-8601.
   doesn't), release without change emits nothing, second drag's
   `before` equals first drag's `after`, channel switch doesn't
   commit, unbind clears. Headless smoke test green.
+
+### M4-S4 — Hue/Sat + Brightness/Contrast ports
+
+- New `src/ui/PropertiesPaneHueSat.{h,cpp}` — three slider+spinbox
+  pairs (hue ∈ [-180, 180]°, saturation ∈ [-100, 100]%, lightness
+  ∈ [-100, 100]%) on the same press-snapshot / release-commit
+  discipline as Levels/Curves panes. Sat/light divided by 100 for
+  the float param ∈ [-1, 1]. No histogram.
+- New `src/ui/PropertiesPaneBrightnessContrast.{h,cpp}` — two
+  slider+spinbox pairs (brightness, contrast both ∈ [-100, 100]%)
+  divided by 100 for the float param. No histogram.
+- `PropertiesDock` extended with two new pages: `bindHueSat(layer)`
+  + `bindBrightnessContrast(layer)`, plus `hueSatCommitRequested` /
+  `brightnessContrastCommitRequested` re-emits.
+- MainWindow: `onLayerAddHueSaturation` and
+  `onLayerAddBrightnessContrast` mirror the Levels/Curves pattern
+  (insert identity + push LayerOpCommand + bind dock + raise;
+  Ctrl+Z removes). `onEditAdjustmentRequested` H-S and B&C
+  branches become 2 lines each. `bindActiveAdjustmentToDock`
+  extended for both. Two new commit lambdas in `buildDocks()`.
+  `onEditAdjustmentRequested` also refactored to use the new
+  `histogramBelow()` helper instead of inline visibility-stash
+  (now no longer dead code post-port).
+- Deleted `src/ui/HueSatDialog.{h,cpp}` and
+  `src/ui/BrightnessContrastDialog.{h,cpp}` + CMakeLists entries.
+- 307 tests across 33 executables (was 299/32). 8 new cases in
+  `test_properties_pane_smaller` (4 per pane): default unbound,
+  drag/release emits one commit, release without change emits
+  nothing, unbind clears pointer. Headless smoke test green.
+
+### M4-S0 through S4 complete; ready for user DoD walkthrough (S5)
+
+- All M3 modal dialogs are gone. Levels/Curves/H-S/B&C are now
+  edited live in the Properties dock parked under LayersPanel on
+  the right side, with one undo entry per drag-end.
+- ToolsPanel is the new accordion of named, collapsible per-tool
+  sections; FG/BG swatches pinned at top.
+- Adjustment layers carry a `clipToBelow` flag (Ctrl+Alt+G or
+  right-click in the Layers panel) — adjustment effect gated by
+  the alpha of the immediate non-clipped pixel layer below.
+- 4 commits on `main` between `e6a86e1` and now, all building
+  cleanly with 100% test pass each step.
+- Pending: S5 DoD walkthrough (user-driven) → tag `v0.4.0-m4`.

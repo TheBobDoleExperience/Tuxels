@@ -4,7 +4,9 @@
 #include <array>
 
 #include "core/Histogram.h"
+#include "layers/BrightnessContrast.h"
 #include "layers/CurvesAdjustment.h"
+#include "layers/HueSaturation.h"
 #include "layers/LevelsAdjustment.h"
 
 class QStackedWidget;
@@ -13,7 +15,9 @@ class QWidget;
 namespace tuxels {
 
 class LayerBase;
+class PropertiesPaneBrightnessContrast;
 class PropertiesPaneCurves;
+class PropertiesPaneHueSat;
 class PropertiesPaneLevels;
 
 // Right-side dock that hosts non-modal property editors for adjustment
@@ -37,8 +41,12 @@ class PropertiesDock : public QDockWidget {
   void bindLevels(LevelsAdjustment* layer, Histogram4x256 hist);
   // Bind a Curves layer + histogram backdrop (M4-S3).
   void bindCurves(CurvesAdjustment* layer, Histogram4x256 hist);
+  // Bind Hue/Saturation (M4-S4). No histogram.
+  void bindHueSat(HueSaturation* layer);
+  // Bind Brightness/Contrast (M4-S4). No histogram.
+  void bindBrightnessContrast(BrightnessContrast* layer);
   // Show the empty state. Called when the active layer is null or non-
-  // adjustment (or an adjustment kind not yet ported to a pane).
+  // adjustment.
   void bindNothing();
 
  signals:
@@ -53,12 +61,20 @@ class PropertiesDock : public QDockWidget {
   void curvesCommitRequested(CurvesAdjustment* layer,
                              CurvesAdjustment::PointsArray before,
                              CurvesAdjustment::PointsArray after);
+  void hueSatCommitRequested(HueSaturation* layer,
+                             HueSaturationParams before,
+                             HueSaturationParams after);
+  void brightnessContrastCommitRequested(BrightnessContrast* layer,
+                                          BrightnessContrastParams before,
+                                          BrightnessContrastParams after);
 
  private:
   QStackedWidget* stack_ = nullptr;
   QWidget* emptyPage_ = nullptr;
   PropertiesPaneLevels* levelsPane_ = nullptr;
   PropertiesPaneCurves* curvesPane_ = nullptr;
+  PropertiesPaneHueSat* hueSatPane_ = nullptr;
+  PropertiesPaneBrightnessContrast* brightnessContrastPane_ = nullptr;
 };
 
 }  // namespace tuxels

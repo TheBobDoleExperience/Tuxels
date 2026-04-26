@@ -5,7 +5,9 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include "ui/PropertiesPaneBrightnessContrast.h"
 #include "ui/PropertiesPaneCurves.h"
+#include "ui/PropertiesPaneHueSat.h"
 #include "ui/PropertiesPaneLevels.h"
 
 namespace tuxels {
@@ -46,7 +48,24 @@ PropertiesDock::PropertiesDock(QWidget* parent)
           &PropertiesDock::curvesCommitRequested);
   stack_->addWidget(curvesPane_);
 
-  // Future panes (S4 H-S / S4 B&C) get added here.
+  // Page 3 — Hue/Saturation pane (M4-S4).
+  hueSatPane_ = new PropertiesPaneHueSat(stack_);
+  connect(hueSatPane_, &PropertiesPaneHueSat::previewChanged, this,
+          &PropertiesDock::previewChanged);
+  connect(hueSatPane_, &PropertiesPaneHueSat::commitRequested, this,
+          &PropertiesDock::hueSatCommitRequested);
+  stack_->addWidget(hueSatPane_);
+
+  // Page 4 — Brightness/Contrast pane (M4-S4).
+  brightnessContrastPane_ =
+      new PropertiesPaneBrightnessContrast(stack_);
+  connect(brightnessContrastPane_,
+          &PropertiesPaneBrightnessContrast::previewChanged, this,
+          &PropertiesDock::previewChanged);
+  connect(brightnessContrastPane_,
+          &PropertiesPaneBrightnessContrast::commitRequested, this,
+          &PropertiesDock::brightnessContrastCommitRequested);
+  stack_->addWidget(brightnessContrastPane_);
 
   setWidget(stack_);
   bindNothing();
@@ -62,9 +81,21 @@ void PropertiesDock::bindCurves(CurvesAdjustment* layer, Histogram4x256 hist) {
   stack_->setCurrentWidget(curvesPane_);
 }
 
+void PropertiesDock::bindHueSat(HueSaturation* layer) {
+  hueSatPane_->bind(layer);
+  stack_->setCurrentWidget(hueSatPane_);
+}
+
+void PropertiesDock::bindBrightnessContrast(BrightnessContrast* layer) {
+  brightnessContrastPane_->bind(layer);
+  stack_->setCurrentWidget(brightnessContrastPane_);
+}
+
 void PropertiesDock::bindNothing() {
   levelsPane_->unbind();
   curvesPane_->unbind();
+  hueSatPane_->unbind();
+  brightnessContrastPane_->unbind();
   stack_->setCurrentWidget(emptyPage_);
 }
 
