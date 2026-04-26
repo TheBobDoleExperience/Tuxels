@@ -4,20 +4,6 @@
 
 namespace tuxels {
 
-namespace {
-
-LayerBase* findById(Document* doc, LayerId id) {
-  if (!doc) return nullptr;
-  auto& tree = doc->tree();
-  for (std::size_t i = 0; i < tree.size(); ++i) {
-    LayerBase* l = tree.at(i);
-    if (l && l->id == id) return l;
-  }
-  return nullptr;
-}
-
-}  // namespace
-
 MoveLayerCommand::MoveLayerCommand(Document* doc, LayerId layerId,
                                    int beforeX, int beforeY,
                                    int afterX, int afterY)
@@ -29,14 +15,16 @@ MoveLayerCommand::MoveLayerCommand(Document* doc, LayerId layerId,
       afterY_(afterY) {}
 
 void MoveLayerCommand::undo() {
-  LayerBase* l = findById(doc_, layerId_);
+  if (!doc_) return;
+  LayerBase* l = doc_->tree().findById(layerId_);
   if (!l) return;
   l->originX = beforeX_;
   l->originY = beforeY_;
 }
 
 void MoveLayerCommand::redo() {
-  LayerBase* l = findById(doc_, layerId_);
+  if (!doc_) return;
+  LayerBase* l = doc_->tree().findById(layerId_);
   if (!l) return;
   l->originX = afterX_;
   l->originY = afterY_;

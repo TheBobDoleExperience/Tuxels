@@ -16,7 +16,14 @@ namespace tuxels {
 enum class PaintTarget { Layer, Mask };
 
 // The editor's top-level model: canvas dimensions + ordered layer tree +
-// active-layer index. No Qt dependency so tests and non-UI code can own one.
+// active-layer id. No Qt dependency so tests and non-UI code can own one.
+//
+// M5: active-layer state is keyed by `LayerId` (a stable uint64) instead of
+// a flat index, so reorders / regroups don't accidentally reseat the active
+// layer. The legacy `activeLayerIndex()` / `setActiveLayerIndex(int)` API is
+// kept as a transitional shim that walks `tree.raw()` (root-level only) —
+// useful while M5 step-by-step migrates call sites; safe to delete once all
+// sites are converted.
 class Document {
  public:
   Document() = default;
@@ -35,14 +42,42 @@ class Document {
   LayerTree& tree() noexcept { return tree_; }
   const LayerTree& tree() const noexcept { return tree_; }
 
-  int activeLayerIndex() const noexcept { return activeLayerIndex_; }
-  void setActiveLayerIndex(int i) {
-    if (i < -1 || static_cast<std::size_t>(i) >= tree_.size()) {
-      activeLayerIndex_ = tree_.empty() ? -1
-                                        : static_cast<int>(tree_.size()) - 1;
+  // M5 canonical active-layer API: id-keyed, survives reorders + regroups.
+  LayerId activeLayerId() const noexcept { return activeLayerId_; }
+  void setActiveLayerId(LayerId id) noexcept {
+    if (id == 0) {
+      activeLayerId_ = 0;
       return;
     }
-    activeLayerIndex_ = i;
+    if (tree_.findById(id) != nullptr) {
+      activeLayerId_ = id;
+    }
+  }
+
+  // Transitional shim — flat-index view of root-level children. Delete once
+  // all M5 call sites are converted to id.
+  int activeLayerIndex() const noexcept {
+    if (activeLayerId_ == 0) return -1;
+    for (std::size_t i = 0; i < tree_.size(); ++i) {
+      if (tree_.at(i)->id == activeLayerId_) return static_cast<int>(i);
+    }
+    return -1;
+  }
+  void setActiveLayerIndex(int i) {
+    if (i < -1 || static_cast<std::size_t>(i) >= tree_.size()) {
+      // Match legacy clamp behavior: out-of-range falls back to top.
+      if (tree_.empty()) {
+        activeLayerId_ = 0;
+        return;
+      }
+      activeLayerId_ = tree_.at(tree_.size() - 1)->id;
+      return;
+    }
+    if (i < 0) {
+      activeLayerId_ = 0;
+      return;
+    }
+    activeLayerId_ = tree_.at(static_cast<std::size_t>(i))->id;
   }
 
   PaintTarget paintTarget() const noexcept { return paintTarget_; }
@@ -58,12 +93,10 @@ class Document {
   }
 
   LayerBase* activeLayer() {
-    if (activeLayerIndex_ < 0) return nullptr;
-    return tree_.at(static_cast<std::size_t>(activeLayerIndex_));
+    return activeLayerId_ == 0 ? nullptr : tree_.findById(activeLayerId_);
   }
   const LayerBase* activeLayer() const {
-    if (activeLayerIndex_ < 0) return nullptr;
-    return tree_.at(static_cast<std::size_t>(activeLayerIndex_));
+    return activeLayerId_ == 0 ? nullptr : tree_.findById(activeLayerId_);
   }
 
   LayerId nextLayerId() noexcept { return ++nextId_; }
@@ -80,8 +113,8 @@ class Document {
     layer->id = nextLayerId();
     layer->name = name;
     PixelLayer* raw = layer.get();
+    activeLayerId_ = layer->id;
     tree_.add(std::move(layer));
-    activeLayerIndex_ = static_cast<int>(tree_.size()) - 1;
     return raw;
   }
 
@@ -97,8 +130,8 @@ class Document {
     layer->originX = ox;
     layer->originY = oy;
     PixelLayer* raw = layer.get();
+    activeLayerId_ = layer->id;
     tree_.add(std::move(layer));
-    activeLayerIndex_ = static_cast<int>(tree_.size()) - 1;
     return raw;
   }
 
@@ -118,8 +151,8 @@ class Document {
     mask->enabled = true;
     layer->mask = std::move(mask);
     T* raw = layer.get();
+    activeLayerId_ = layer->id;
     tree_.add(std::move(layer));
-    activeLayerIndex_ = static_cast<int>(tree_.size()) - 1;
     paintTarget_ = PaintTarget::Mask;
     return raw;
   }
@@ -128,7 +161,7 @@ class Document {
   int width_ = 0;
   int height_ = 0;
   LayerTree tree_;
-  int activeLayerIndex_ = -1;
+  LayerId activeLayerId_ = 0;
   LayerId nextId_ = 0;
   PaintTarget paintTarget_ = PaintTarget::Layer;
   std::unique_ptr<SelectionMask> selection_;

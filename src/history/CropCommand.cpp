@@ -90,12 +90,8 @@ CropCommand::Snapshot CropCommand::captureDeep(const Document& doc) {
   Snapshot s;
   s.width = doc.width();
   s.height = doc.height();
-  const auto& tree = doc.tree();
-  s.layers.reserve(tree.size());
-  for (std::size_t i = 0; i < tree.size(); ++i) {
-    const LayerBase* base = tree.at(i);
+  doc.tree().forEach([&s](const LayerBase* base) {
     LayerEntry e;
-    e.id = base->id;
     e.originX = base->originX;
     e.originY = base->originY;
     if (auto* px = dynamic_cast<const PixelLayer*>(base)) {
@@ -106,19 +102,20 @@ CropCommand::Snapshot CropCommand::captureDeep(const Document& doc) {
       e.maskImage = cloneImage(base->mask->image);
       e.maskEnabled = base->mask->enabled;
     }
-    s.layers.push_back(std::move(e));
-  }
+    s.layers.emplace(base->id, std::move(e));
+  });
   if (doc.selection()) s.selection = doc.selection()->clone();
   return s;
 }
 
 void CropCommand::installDeep(Document& doc, const Snapshot& snap) {
   doc.setSize(snap.width, snap.height);
-  auto& tree = doc.tree();
-  const std::size_t n = std::min(tree.size(), snap.layers.size());
-  for (std::size_t i = 0; i < n; ++i) {
-    LayerBase* base = tree.at(i);
-    const LayerEntry& e = snap.layers[i];
+  // Restore each layer that's still in the tree by id. Layers added after
+  // the snapshot are absent from the map and stay at their current state.
+  doc.tree().forEach([&snap](LayerBase* base) {
+    auto it = snap.layers.find(base->id);
+    if (it == snap.layers.end()) return;
+    const LayerEntry& e = it->second;
     base->originX = e.originX;
     base->originY = e.originY;
     if (auto* px = dynamic_cast<PixelLayer*>(base)) {
@@ -127,23 +124,21 @@ void CropCommand::installDeep(Document& doc, const Snapshot& snap) {
     if (e.hasMask) {
       if (!base->mask) {
         base->mask = std::make_unique<LayerMask>(e.maskImage.width(),
-                                                 e.maskImage.height());
+                                                  e.maskImage.height());
       }
       base->mask->image = cloneImage(e.maskImage);
       base->mask->enabled = e.maskEnabled;
     } else if (base->mask) {
       base->mask.reset();
     }
-  }
+  });
   doc.setSelection(snap.selection ? snap.selection->clone() : nullptr);
 }
 
 void CropCommand::applyCropInPlace(Document& doc, Rect cropRect) {
-  auto& tree = doc.tree();
-  for (std::size_t i = 0; i < tree.size(); ++i) {
-    LayerBase* base = tree.at(i);
+  doc.tree().forEach([cropRect](LayerBase* base) {
     auto* px = dynamic_cast<PixelLayer*>(base);
-    if (!px) continue;
+    if (!px) return;
 
     const int origOx = base->originX;
     const int origOy = base->originY;
@@ -160,7 +155,7 @@ void CropCommand::applyCropInPlace(Document& doc, Rect cropRect) {
       base->originX = 0;
       base->originY = 0;
       if (base->mask) base->mask.reset();
-      continue;
+      return;
     }
 
     // New layer image sized exactly to the surviving pixel rect, sourced
@@ -180,7 +175,7 @@ void CropCommand::applyCropInPlace(Document& doc, Rect cropRect) {
 
     base->originX = overlapDoc.x - cropRect.x;
     base->originY = overlapDoc.y - cropRect.y;
-  }
+  });
 
   if (const SelectionMask* sel = doc.selection()) {
     doc.setSelection(croppedSelection(*sel, cropRect));

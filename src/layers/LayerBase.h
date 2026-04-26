@@ -15,9 +15,11 @@ using LayerId = uint64_t;
 
 // Discriminator used by the compositor to pick a render path. Pixel layers
 // contribute their own tile pixels (blended over the accumulator); adjustment
-// layers transform the accumulator in place. See `AdjustmentLayer` and
-// `compose()` for the corresponding dispatch.
-enum class LayerKind { Pixel, Adjustment };
+// layers transform the accumulator in place. Group layers (M5) contain other
+// layers and are dispatched via the compose recursion (their `renderTile`
+// returns false). See `AdjustmentLayer`, `GroupLayer`, and `compose()` for
+// the corresponding dispatch.
+enum class LayerKind { Pixel, Adjustment, Group };
 
 class LayerBase {
  public:

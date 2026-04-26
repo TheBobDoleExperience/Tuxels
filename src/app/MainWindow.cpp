@@ -418,8 +418,15 @@ void MainWindow::setDocument(std::unique_ptr<Document> doc) {
 
 void MainWindow::refreshAfterUndoRedo(Rect dirtyRect) {
   if (!doc_) return;
-  if (doc_->activeLayerIndex() >= static_cast<int>(doc_->tree().size())) {
-    doc_->setActiveLayerIndex(static_cast<int>(doc_->tree().size()) - 1);
+  // Active id may point at a layer that's been removed; clear to none and
+  // let the panel pick a sensible default on the next user click.
+  if (doc_->activeLayerId() != 0 &&
+      doc_->tree().findById(doc_->activeLayerId()) == nullptr) {
+    if (!doc_->tree().empty()) {
+      doc_->setActiveLayerId(doc_->tree().at(doc_->tree().size() - 1)->id);
+    } else {
+      doc_->setActiveLayerId(0);
+    }
   }
   layersPanel_->refresh();
   if (dirtyRect.isEmpty()) {
@@ -545,7 +552,7 @@ void MainWindow::onFilePlace() {
   const int oy = (doc_->height() - ph) / 2;
   const std::string name = QFileInfo(path).fileName().toStdString();
   const LayerId id = doc_->nextLayerId();
-  const int prevActive = doc_->activeLayerIndex();
+  const LayerId prevActiveId = doc_->activeLayerId();
 
   // Shared stash so redo reinstalls the exact same layer instance that undo
   // detached — mirrors `onLayerAdd`.
@@ -567,15 +574,14 @@ void MainWindow::onFilePlace() {
       px->image = std::move(*cached);
       layer = std::move(px);
     }
-    const std::size_t insertIdx = doc_->tree().size();
     doc_->tree().add(std::move(layer));
-    doc_->setActiveLayerIndex(static_cast<int>(insertIdx));
+    doc_->setActiveLayerId(id);
     refreshAfterUndoRedo();
   };
-  auto undoIt = [this, stash, prevActive]() mutable {
+  auto undoIt = [this, stash, prevActiveId]() mutable {
     const std::size_t lastIdx = doc_->tree().size() - 1;
     *stash = doc_->tree().removeAt(lastIdx);
-    doc_->setActiveLayerIndex(prevActive);
+    doc_->setActiveLayerId(prevActiveId);
     refreshAfterUndoRedo();
   };
 
@@ -637,14 +643,14 @@ void MainWindow::onLayerAdd() {
   const int w = doc_->width();
   const int h = doc_->height();
   const LayerId id = doc_->nextLayerId();
-  const int prevActive = doc_->activeLayerIndex();
+  const LayerId prevActiveId = doc_->activeLayerId();
 
   // Stash the layer ptr so that redo can rebuild its identity. We hold a
   // shared_ptr owned by the command; when it's "attached" to the tree we
   // transfer ownership in, and when detached (undone) we take it back.
   auto stash = std::make_shared<std::unique_ptr<LayerBase>>();
 
-  auto doIt = [this, stash, name, w, h, id, prevActive]() mutable {
+  auto doIt = [this, stash, name, w, h, id]() mutable {
     std::unique_ptr<LayerBase> layer;
     if (*stash) {
       layer = std::move(*stash);
@@ -654,16 +660,14 @@ void MainWindow::onLayerAdd() {
       px->name = name;
       layer = std::move(px);
     }
-    const std::size_t insertIdx = doc_->tree().size();
     doc_->tree().add(std::move(layer));
-    doc_->setActiveLayerIndex(static_cast<int>(insertIdx));
+    doc_->setActiveLayerId(id);
     refreshAfterUndoRedo();
-    (void)prevActive;
   };
-  auto undoIt = [this, stash, prevActive]() mutable {
+  auto undoIt = [this, stash, prevActiveId]() mutable {
     const std::size_t lastIdx = doc_->tree().size() - 1;
     *stash = doc_->tree().removeAt(lastIdx);
-    doc_->setActiveLayerIndex(prevActive);
+    doc_->setActiveLayerId(prevActiveId);
     refreshAfterUndoRedo();
   };
 
@@ -678,20 +682,24 @@ void MainWindow::onLayerDelete() {
   const int i = doc_->activeLayerIndex();
   if (i < 0 || static_cast<std::size_t>(i) >= doc_->tree().size()) return;
   const std::size_t idx = static_cast<std::size_t>(i);
-  const int prevActive = i;
+  const LayerId prevActiveId = doc_->activeLayerId();
   auto stash = std::make_shared<std::unique_ptr<LayerBase>>();
 
   auto doIt = [this, stash, idx]() mutable {
     *stash = doc_->tree().removeAt(idx);
-    const int newActive = std::min(static_cast<int>(doc_->tree().size()) - 1,
-                                   static_cast<int>(idx));
-    doc_->setActiveLayerIndex(newActive);
+    // Pick the layer that now occupies `idx`, or the new top, or none.
+    if (doc_->tree().empty()) {
+      doc_->setActiveLayerId(0);
+    } else {
+      const std::size_t newIdx = std::min(idx, doc_->tree().size() - 1);
+      doc_->setActiveLayerId(doc_->tree().at(newIdx)->id);
+    }
     refreshAfterUndoRedo();
   };
-  auto undoIt = [this, stash, idx, prevActive]() mutable {
+  auto undoIt = [this, stash, idx, prevActiveId]() mutable {
     if (!*stash) return;
     doc_->tree().insertAt(idx, std::move(*stash));
-    doc_->setActiveLayerIndex(prevActive);
+    doc_->setActiveLayerId(prevActiveId);
     refreshAfterUndoRedo();
   };
 
@@ -707,15 +715,16 @@ void MainWindow::onLayerMoveUp() {
   if (i < 0 || i + 1 >= static_cast<int>(doc_->tree().size())) return;
   const std::size_t from = static_cast<std::size_t>(i);
   const std::size_t to = from + 1;
+  const LayerId activeId = doc_->activeLayerId();
 
-  auto doIt = [this, from, to]() {
+  auto doIt = [this, from, to, activeId]() {
     doc_->tree().move(from, to);
-    doc_->setActiveLayerIndex(static_cast<int>(to));
+    doc_->setActiveLayerId(activeId);
     refreshAfterUndoRedo();
   };
-  auto undoIt = [this, from, to]() {
+  auto undoIt = [this, from, to, activeId]() {
     doc_->tree().move(to, from);
-    doc_->setActiveLayerIndex(static_cast<int>(from));
+    doc_->setActiveLayerId(activeId);
     refreshAfterUndoRedo();
   };
 
@@ -731,15 +740,16 @@ void MainWindow::onLayerMoveDown() {
   if (i <= 0) return;
   const std::size_t from = static_cast<std::size_t>(i);
   const std::size_t to = from - 1;
+  const LayerId activeId = doc_->activeLayerId();
 
-  auto doIt = [this, from, to]() {
+  auto doIt = [this, from, to, activeId]() {
     doc_->tree().move(from, to);
-    doc_->setActiveLayerIndex(static_cast<int>(to));
+    doc_->setActiveLayerId(activeId);
     refreshAfterUndoRedo();
   };
-  auto undoIt = [this, from, to]() {
+  auto undoIt = [this, from, to, activeId]() {
     doc_->tree().move(to, from);
-    doc_->setActiveLayerIndex(static_cast<int>(from));
+    doc_->setActiveLayerId(activeId);
     refreshAfterUndoRedo();
   };
 
@@ -1058,13 +1068,7 @@ void MainWindow::onDeleteLayerMask() {
 
 void MainWindow::onLayerPaintTargetChange(LayerBase* layer, PaintTarget target) {
   if (!doc_ || !layer) return;
-  const auto n = doc_->tree().size();
-  for (std::size_t i = 0; i < n; ++i) {
-    if (doc_->tree().at(i) == layer) {
-      doc_->setActiveLayerIndex(static_cast<int>(i));
-      break;
-    }
-  }
+  doc_->setActiveLayerId(layer->id);
   doc_->setPaintTarget(target);
   if (layersPanel_) layersPanel_->refresh();
 }
@@ -1108,31 +1112,33 @@ void MainWindow::onLayerDeleteMaskRequest(LayerBase* layer) {
 
 Histogram4x256 MainWindow::histogramBelow(LayerBase* layer) {
   if (!doc_ || !layer) return Histogram4x256{};
+  // Walk the flattened tree (matches compose's iteration order) and hide
+  // every layer at-or-after the target so the preview composite reflects
+  // "what's about to be adjusted" by this layer.
+  std::vector<LayerBase*> flat = doc_->tree().flatten();
   std::vector<bool> saved;
-  saved.reserve(doc_->tree().size());
+  saved.reserve(flat.size());
   bool pastLayer = false;
-  for (std::size_t i = 0; i < doc_->tree().size(); ++i) {
-    LayerBase* l = doc_->tree().at(i);
+  for (LayerBase* l : flat) {
     saved.push_back(l->visible);
     if (l == layer) pastLayer = true;
     if (pastLayer) l->visible = false;
   }
   TuxImage preview(doc_->width(), doc_->height());
   compose(doc_->tree(), preview);
-  for (std::size_t i = 0; i < doc_->tree().size(); ++i) {
-    doc_->tree().at(i)->visible = saved[i];
+  for (std::size_t i = 0; i < flat.size(); ++i) {
+    flat[i]->visible = saved[i];
   }
   return computeHistogram(preview, doc_->selection());
 }
 
 void MainWindow::bindActiveAdjustmentToDock() {
   if (!propertiesDock_ || !doc_) return;
-  const int idx = doc_->activeLayerIndex();
-  if (idx < 0 || idx >= static_cast<int>(doc_->tree().size())) {
+  LayerBase* layer = doc_->activeLayer();
+  if (!layer) {
     propertiesDock_->bindNothing();
     return;
   }
-  LayerBase* layer = doc_->tree().at(static_cast<std::size_t>(idx));
   if (auto* levels = dynamic_cast<LevelsAdjustment*>(layer)) {
     propertiesDock_->bindLevels(levels, histogramBelow(levels));
     return;
@@ -1166,12 +1172,13 @@ void MainWindow::onLayerAddLevels() {
   auto layer = std::make_unique<LevelsAdjustment>();
   layer->name = "Levels";
   const PaintTarget prevPaintTarget = doc_->paintTarget();
-  const int prevActive = doc_->activeLayerIndex();
+  const LayerId prevActiveId = doc_->activeLayerId();
 
   // Insert with identity params; bind the dock so the user can adjust
   // immediately. No more modal Cancel — Ctrl+Z removes the layer if the
   // user changes their mind.
   LevelsAdjustment* raw = doc_->addAdjustmentLayer(std::move(layer));
+  const LayerId addedId = raw->id;
   layersPanel_->refresh();
   canvas_->requestRecomposite();
 
@@ -1179,17 +1186,17 @@ void MainWindow::onLayerAddLevels() {
   auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
       doc_->tree().removeAt(idx));
 
-  auto doIt = [this, stash, idx]() mutable {
+  auto doIt = [this, stash, idx, addedId]() mutable {
     if (!*stash) return;
     doc_->tree().insertAt(idx, std::move(*stash));
-    doc_->setActiveLayerIndex(static_cast<int>(idx));
+    doc_->setActiveLayerId(addedId);
     doc_->setPaintTarget(PaintTarget::Mask);
     refreshAfterUndoRedo();
     bindActiveAdjustmentToDock();
   };
-  auto undoIt = [this, stash, idx, prevActive, prevPaintTarget]() mutable {
+  auto undoIt = [this, stash, idx, prevActiveId, prevPaintTarget]() mutable {
     *stash = doc_->tree().removeAt(idx);
-    doc_->setActiveLayerIndex(prevActive);
+    doc_->setActiveLayerId(prevActiveId);
     doc_->setPaintTarget(prevPaintTarget);
     refreshAfterUndoRedo();
     bindActiveAdjustmentToDock();
@@ -1213,9 +1220,10 @@ void MainWindow::onLayerAddCurves() {
   auto layer = std::make_unique<CurvesAdjustment>();
   layer->name = "Curves";
   const PaintTarget prevPaintTarget = doc_->paintTarget();
-  const int prevActive = doc_->activeLayerIndex();
+  const LayerId prevActiveId = doc_->activeLayerId();
 
   CurvesAdjustment* raw = doc_->addAdjustmentLayer(std::move(layer));
+  const LayerId addedId = raw->id;
   layersPanel_->refresh();
   canvas_->requestRecomposite();
 
@@ -1225,17 +1233,17 @@ void MainWindow::onLayerAddCurves() {
   auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
       doc_->tree().removeAt(idx));
 
-  auto doIt = [this, stash, idx]() mutable {
+  auto doIt = [this, stash, idx, addedId]() mutable {
     if (!*stash) return;
     doc_->tree().insertAt(idx, std::move(*stash));
-    doc_->setActiveLayerIndex(static_cast<int>(idx));
+    doc_->setActiveLayerId(addedId);
     doc_->setPaintTarget(PaintTarget::Mask);
     refreshAfterUndoRedo();
     bindActiveAdjustmentToDock();
   };
-  auto undoIt = [this, stash, idx, prevActive, prevPaintTarget]() mutable {
+  auto undoIt = [this, stash, idx, prevActiveId, prevPaintTarget]() mutable {
     *stash = doc_->tree().removeAt(idx);
-    doc_->setActiveLayerIndex(prevActive);
+    doc_->setActiveLayerId(prevActiveId);
     doc_->setPaintTarget(prevPaintTarget);
     refreshAfterUndoRedo();
     bindActiveAdjustmentToDock();
@@ -1254,9 +1262,10 @@ void MainWindow::onLayerAddBrightnessContrast() {
   auto layer = std::make_unique<BrightnessContrast>();
   layer->name = "Brightness/Contrast";
   const PaintTarget prevPaintTarget = doc_->paintTarget();
-  const int prevActive = doc_->activeLayerIndex();
+  const LayerId prevActiveId = doc_->activeLayerId();
 
   BrightnessContrast* raw = doc_->addAdjustmentLayer(std::move(layer));
+  const LayerId addedId = raw->id;
   layersPanel_->refresh();
   canvas_->requestRecomposite();
 
@@ -1264,17 +1273,17 @@ void MainWindow::onLayerAddBrightnessContrast() {
   auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
       doc_->tree().removeAt(idx));
 
-  auto doIt = [this, stash, idx]() mutable {
+  auto doIt = [this, stash, idx, addedId]() mutable {
     if (!*stash) return;
     doc_->tree().insertAt(idx, std::move(*stash));
-    doc_->setActiveLayerIndex(static_cast<int>(idx));
+    doc_->setActiveLayerId(addedId);
     doc_->setPaintTarget(PaintTarget::Mask);
     refreshAfterUndoRedo();
     bindActiveAdjustmentToDock();
   };
-  auto undoIt = [this, stash, idx, prevActive, prevPaintTarget]() mutable {
+  auto undoIt = [this, stash, idx, prevActiveId, prevPaintTarget]() mutable {
     *stash = doc_->tree().removeAt(idx);
-    doc_->setActiveLayerIndex(prevActive);
+    doc_->setActiveLayerId(prevActiveId);
     doc_->setPaintTarget(prevPaintTarget);
     refreshAfterUndoRedo();
     bindActiveAdjustmentToDock();
@@ -1294,9 +1303,10 @@ void MainWindow::onLayerAddHueSaturation() {
   auto layer = std::make_unique<HueSaturation>();
   layer->name = "Hue/Saturation";
   const PaintTarget prevPaintTarget = doc_->paintTarget();
-  const int prevActive = doc_->activeLayerIndex();
+  const LayerId prevActiveId = doc_->activeLayerId();
 
   HueSaturation* raw = doc_->addAdjustmentLayer(std::move(layer));
+  const LayerId addedId = raw->id;
   layersPanel_->refresh();
   canvas_->requestRecomposite();
 
@@ -1304,17 +1314,17 @@ void MainWindow::onLayerAddHueSaturation() {
   auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
       doc_->tree().removeAt(idx));
 
-  auto doIt = [this, stash, idx]() mutable {
+  auto doIt = [this, stash, idx, addedId]() mutable {
     if (!*stash) return;
     doc_->tree().insertAt(idx, std::move(*stash));
-    doc_->setActiveLayerIndex(static_cast<int>(idx));
+    doc_->setActiveLayerId(addedId);
     doc_->setPaintTarget(PaintTarget::Mask);
     refreshAfterUndoRedo();
     bindActiveAdjustmentToDock();
   };
-  auto undoIt = [this, stash, idx, prevActive, prevPaintTarget]() mutable {
+  auto undoIt = [this, stash, idx, prevActiveId, prevPaintTarget]() mutable {
     *stash = doc_->tree().removeAt(idx);
-    doc_->setActiveLayerIndex(prevActive);
+    doc_->setActiveLayerId(prevActiveId);
     doc_->setPaintTarget(prevPaintTarget);
     refreshAfterUndoRedo();
     bindActiveAdjustmentToDock();
@@ -1360,9 +1370,7 @@ void MainWindow::onEditAdjustmentRequested(LayerBase* layer) {
 
 void MainWindow::onToggleClipToBelow() {
   if (!doc_) return;
-  const int active = doc_->activeLayerIndex();
-  if (active < 0 || active >= static_cast<int>(doc_->tree().size())) return;
-  onLayerToggleClipToBelow(doc_->tree().at(static_cast<std::size_t>(active)));
+  if (LayerBase* l = doc_->activeLayer()) onLayerToggleClipToBelow(l);
 }
 
 void MainWindow::onLayerToggleClipToBelow(LayerBase* layer) {
@@ -1380,22 +1388,15 @@ void MainWindow::onLayerToggleClipToBelow(LayerBase* layer) {
   layer->clipToBelow = !wasClipped;
   layersPanel_->refresh();
   canvas_->requestRecomposite();
-  auto findById = [this](LayerId target) -> LayerBase* {
-    for (std::size_t i = 0; i < doc_->tree().size(); ++i) {
-      LayerBase* l = doc_->tree().at(i);
-      if (l->id == target) return l;
-    }
-    return nullptr;
-  };
-  auto doIt = [this, id, newVal = !wasClipped, findById]() {
-    if (auto* l = findById(id)) {
+  auto doIt = [this, id, newVal = !wasClipped]() {
+    if (auto* l = doc_->tree().findById(id)) {
       l->clipToBelow = newVal;
       layersPanel_->refresh();
       canvas_->requestRecomposite();
     }
   };
-  auto undoIt = [this, id, oldVal = wasClipped, findById]() {
-    if (auto* l = findById(id)) {
+  auto undoIt = [this, id, oldVal = wasClipped]() {
+    if (auto* l = doc_->tree().findById(id)) {
       l->clipToBelow = oldVal;
       layersPanel_->refresh();
       canvas_->requestRecomposite();

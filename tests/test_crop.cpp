@@ -234,6 +234,45 @@ TEST(crop_command_discards_selection_outside_crop) {
   CHECK_NEAR(doc.selection()->sample(32, 32), 1.f, 1e-5f);
 }
 
+TEST(crop_command_id_keyed_snapshot_survives_reorder) {
+  // M5-S0: CropCommand's snapshot is keyed by LayerId. Reordering layers
+  // between capture and undo must not misroute pixels — each layer's
+  // pre-crop image returns to the layer that still carries the same id,
+  // regardless of where it now lives in the stack.
+  Document doc(64, 64);
+  auto* a = doc.addBlankPixelLayer("A");
+  auto* b = doc.addBlankPixelLayer("B");
+  // Mark A solid red, B solid green so a swap mid-undo is visually obvious.
+  for (int y = 0; y < 64; ++y) {
+    for (int x = 0; x < 64; ++x) {
+      a->image.setPixel(x, y, Rgba32F{1.f, 0.f, 0.f, 1.f});
+      b->image.setPixel(x, y, Rgba32F{0.f, 1.f, 0.f, 1.f});
+    }
+  }
+  const LayerId aId = a->id;
+  const LayerId bId = b->id;
+
+  CropCommand cmd(&doc, Rect{0, 0, 32, 32});
+  // Reorder: swap A and B between capture and undo.
+  doc.tree().move(0, 1);
+  cmd.undo();
+
+  // After undo: doc back to 64x64, each layer holds its original colors.
+  CHECK_EQ(doc.width(), 64);
+  CHECK_EQ(doc.height(), 64);
+  LayerBase* aAfter = doc.tree().findById(aId);
+  LayerBase* bAfter = doc.tree().findById(bId);
+  CHECK(aAfter != nullptr);
+  CHECK(bAfter != nullptr);
+  auto* aPx = dynamic_cast<PixelLayer*>(aAfter);
+  auto* bPx = dynamic_cast<PixelLayer*>(bAfter);
+  CHECK(aPx != nullptr && bPx != nullptr);
+  CHECK_NEAR(aPx->image.getPixel(20, 20).r, 1.f, 1e-5f);
+  CHECK_NEAR(aPx->image.getPixel(20, 20).g, 0.f, 1e-5f);
+  CHECK_NEAR(bPx->image.getPixel(20, 20).g, 1.f, 1e-5f);
+  CHECK_NEAR(bPx->image.getPixel(20, 20).r, 0.f, 1e-5f);
+}
+
 TEST(crop_command_round_trip_preserves_tile_content) {
   // Regression: after a crop then undo, getPixel reads should match the
   // original layer tile-for-tile, including pixels on tile boundaries.

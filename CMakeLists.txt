@@ -25,7 +25,9 @@ set(TUXELS_CORE_SOURCES
   src/core/SelectionMask.cpp
   src/layers/BrightnessContrast.cpp
   src/layers/CurvesAdjustment.cpp
+  src/layers/GroupLayer.cpp
   src/layers/HueSaturation.cpp
+  src/layers/LayerTree.cpp
   src/layers/LevelsAdjustment.cpp
   src/layers/PixelLayer.cpp
   src/compositor/compose.cpp
@@ -118,6 +120,7 @@ tuxels_add_test(test_undo)
 tuxels_add_test(test_selection)
 tuxels_add_test(test_fill)
 tuxels_add_test(test_crop)
+tuxels_add_test(test_layer_tree)
 tuxels_add_test(test_txl_io)
 tuxels_add_test(test_layer_origin)
 tuxels_add_test(test_place_image)

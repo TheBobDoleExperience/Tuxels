@@ -9,12 +9,7 @@ namespace {
 
 PixelLayer* findPixelLayerById(Document* doc, LayerId id) {
   if (!doc) return nullptr;
-  auto& tree = doc->tree();
-  for (std::size_t i = 0; i < tree.size(); ++i) {
-    LayerBase* l = tree.at(i);
-    if (l && l->id == id) return dynamic_cast<PixelLayer*>(l);
-  }
-  return nullptr;
+  return dynamic_cast<PixelLayer*>(doc->tree().findById(id));
 }
 
 }  // namespace

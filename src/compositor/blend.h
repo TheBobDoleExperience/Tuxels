@@ -50,22 +50,25 @@ inline float bm_soft_light(float cb, float cs) {
 
 // Dispatch table — per-channel blend value for a given mode. Dissolve is
 // handled specially by the compositor (it manipulates alpha, not color) and
-// this function treats it as Normal.
+// this function treats it as Normal. Pass-Through is handled by the compose
+// recursion and never reaches per-pixel blend; falls back to Normal as a
+// safety net.
 inline float applyBlend(BlendMode mode, float cb, float cs) {
   switch (mode) {
-    case BlendMode::Normal:     return bm_normal(cb, cs);
-    case BlendMode::Dissolve:   return bm_normal(cb, cs);
-    case BlendMode::Darken:     return bm_darken(cb, cs);
-    case BlendMode::Multiply:   return bm_multiply(cb, cs);
-    case BlendMode::ColorBurn:  return bm_color_burn(cb, cs);
-    case BlendMode::Lighten:    return bm_lighten(cb, cs);
-    case BlendMode::Screen:     return bm_screen(cb, cs);
-    case BlendMode::ColorDodge: return bm_color_dodge(cb, cs);
-    case BlendMode::Overlay:    return bm_overlay(cb, cs);
-    case BlendMode::SoftLight:  return bm_soft_light(cb, cs);
-    case BlendMode::HardLight:  return bm_hard_light(cb, cs);
-    case BlendMode::Difference: return bm_difference(cb, cs);
-    case BlendMode::Exclusion:  return bm_exclusion(cb, cs);
+    case BlendMode::Normal:      return bm_normal(cb, cs);
+    case BlendMode::Dissolve:    return bm_normal(cb, cs);
+    case BlendMode::Darken:      return bm_darken(cb, cs);
+    case BlendMode::Multiply:    return bm_multiply(cb, cs);
+    case BlendMode::ColorBurn:   return bm_color_burn(cb, cs);
+    case BlendMode::Lighten:     return bm_lighten(cb, cs);
+    case BlendMode::Screen:      return bm_screen(cb, cs);
+    case BlendMode::ColorDodge:  return bm_color_dodge(cb, cs);
+    case BlendMode::Overlay:     return bm_overlay(cb, cs);
+    case BlendMode::SoftLight:   return bm_soft_light(cb, cs);
+    case BlendMode::HardLight:   return bm_hard_light(cb, cs);
+    case BlendMode::Difference:  return bm_difference(cb, cs);
+    case BlendMode::Exclusion:   return bm_exclusion(cb, cs);
+    case BlendMode::PassThrough: return bm_normal(cb, cs);
   }
   return cs;
 }

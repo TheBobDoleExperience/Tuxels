@@ -2,7 +2,7 @@
 
 #include <memory>
 #include <string>
-#include <vector>
+#include <unordered_map>
 
 #include "core/SelectionMask.h"
 #include "core/TuxImage.h"
@@ -21,6 +21,13 @@ class Document;
 // "Deep copy" here means tile-level clones of every PixelLayer image, every
 // attached mask, and the active selection — crop is a rare operation so the
 // memory spike (one full document copy on the undo stack) is acceptable.
+//
+// M5: snapshot is keyed by `LayerId` (was index-keyed pre-M5). Layer order
+// can shift between capture and `installDeep` if intervening commands
+// reorder/regroup layers — id-keyed restoration places each layer's pixels
+// back on the layer that still carries that id, regardless of where it now
+// lives in the tree. Layers added after the crop (and therefore absent from
+// the snapshot) are left alone on undo.
 class CropCommand : public Command {
  public:
   CropCommand(Document* doc, Rect cropRect);
@@ -34,7 +41,6 @@ class CropCommand : public Command {
 
  private:
   struct LayerEntry {
-    LayerId id = 0;
     int originX = 0;
     int originY = 0;
     TuxImage image;
@@ -45,7 +51,7 @@ class CropCommand : public Command {
   struct Snapshot {
     int width = 0;
     int height = 0;
-    std::vector<LayerEntry> layers;
+    std::unordered_map<LayerId, LayerEntry> layers;
     std::unique_ptr<SelectionMask> selection;
   };
 

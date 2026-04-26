@@ -56,15 +56,25 @@ void composeTileRange(const LayerTree& tree, TuxImage& out, int tx0, int ty0,
   // tile (next outer iteration).
   std::vector<float> lastBaseAlpha(kTilePixels);
 
+  // M5-S0 stub: flatten the tree once before the per-tile loop. Until S1
+  // wires real recursion, groups are walked as if Pass-Through (children
+  // appear in the flattened list; the group node itself is currently
+  // ignored by the per-layer dispatch since it returns false from
+  // `renderTile` and is not an Adjustment).
+  const std::vector<const LayerBase*> flat = tree.flatten();
+
   for (int ty = ty0; ty < ty1; ++ty) {
     for (int tx = tx0; tx < tx1; ++tx) {
       const TileCoord tc{tx, ty};
       std::fill(accum.begin(), accum.end(), Rgba32F::transparent());
       bool hasBase = false;
 
-      for (std::size_t li = 0; li < tree.size(); ++li) {
-        const LayerBase* layer = tree.at(li);
+      for (const LayerBase* layer : flat) {
         if (!layer->visible || layer->opacity <= 0.f) continue;
+        // Group nodes contribute no pixels of their own — children have
+        // already been emitted before the group via flatten()'s child-then-
+        // self order. Skip until S1's compose recursion replaces this.
+        if (layer->kind() == LayerKind::Group) continue;
 
         if (layer->kind() == LayerKind::Adjustment) {
           // Transform-in-place path: copy the current accumulator into a

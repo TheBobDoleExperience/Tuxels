@@ -103,10 +103,16 @@ void LayersPanel::refresh() {
     rows_.push_back(row);
   }
 
-  // Reflect active-layer selection.
-  if (doc_->activeLayerIndex() >= 0) {
-    const int uiRow = n - 1 - doc_->activeLayerIndex();
-    if (uiRow >= 0 && uiRow < n) list_->setCurrentRow(uiRow);
+  // Reflect active-layer selection by id (M5).
+  const LayerId activeId = doc_->activeLayerId();
+  if (activeId != 0) {
+    for (int i = 0; i < static_cast<int>(rows_.size()); ++i) {
+      if (rows_[static_cast<std::size_t>(i)]->layer() &&
+          rows_[static_cast<std::size_t>(i)]->layer()->id == activeId) {
+        list_->setCurrentRow(i);
+        break;
+      }
+    }
   }
   for (int i = 0; i < static_cast<int>(rows_.size()); ++i) {
     rows_[static_cast<std::size_t>(i)]->setActive(i == list_->currentRow());
@@ -118,14 +124,13 @@ void LayersPanel::refresh() {
 
 void LayersPanel::onCurrentRowChanged(int row) {
   if (refreshing_ || !doc_) return;
-  if (row < 0) {
-    doc_->setActiveLayerIndex(-1);
+  if (row < 0 || row >= static_cast<int>(rows_.size())) {
+    doc_->setActiveLayerId(0);
     emit activeLayerChanged();
     return;
   }
-  const int n = static_cast<int>(doc_->tree().size());
-  const int modelIdx = n - 1 - row;
-  doc_->setActiveLayerIndex(modelIdx);
+  LayerBase* layer = rows_[static_cast<std::size_t>(row)]->layer();
+  doc_->setActiveLayerId(layer ? layer->id : 0);
   for (int i = 0; i < static_cast<int>(rows_.size()); ++i) {
     rows_[static_cast<std::size_t>(i)]->setActive(i == row);
   }
