@@ -265,6 +265,22 @@ Append-only. Never rewrite history. Dated entries in ISO-8601.
 - Adjustment layers carry a `clipToBelow` flag (Ctrl+Alt+G or
   right-click in the Layers panel) — adjustment effect gated by
   the alpha of the immediate non-clipped pixel layer below.
-- 4 commits on `main` between `e6a86e1` and now, all building
+- 5 commits on `main` between `e6a86e1` and now, all building
   cleanly with 100% test pass each step.
 - Pending: S5 DoD walkthrough (user-driven) → tag `v0.4.0-m4`.
+
+### M4-S5 — v0.4.0-m4 tagged
+
+- User confirmed DoD walkthrough end-to-end: ToolsPanel accordion
+  (chevron-only collapse, header-click activates, FG/BG swatches
+  pinned), clip-to-layer (Ctrl+Alt+G + right-click + `↳` glyph +
+  `.txl` v4 round-trip), Properties dock (binds for all four
+  adjustment kinds, live preview during drag, exactly one undo
+  entry per drag-end, empty state when active layer isn't an
+  adjustment), regression-clean (M3 keyboard shortcuts unchanged,
+  M3 `.txl` v3 files load with `clipToBelow == false`).
+- Tagged `v0.4.0-m4` on the `1d776f4` HEAD (annotated tag with
+  highlight body, matching the M0/M1/M2 convention).
+- 307 unit tests passing across 33 executables. `STATUS.md`
+  flipped to "M4 ✅ shipped"; `NEXT.md` rewritten for M5 kickoff
+  (smart objects / PSD import / layer groups as candidates).
