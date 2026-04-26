@@ -140,15 +140,23 @@ void MainWindow::buildMenus() {
   connect(delLayerAct, &QAction::triggered, this, &MainWindow::onLayerDelete);
 
   layerMenu->addSeparator();
-  // Group / Ungroup placeholders — wired in M5-S4. Disabled until then so
-  // the user discovers the shortcuts but doesn't get a half-implemented
-  // path. The shortcut keys are already reserved (Ctrl+G / Ctrl+Shift+G).
-  auto* groupLayerAct = layerMenu->addAction(tr("&Group Layer"));
-  groupLayerAct->setShortcut(QKeySequence(tr("Ctrl+G")));
-  groupLayerAct->setEnabled(false);
-  auto* ungroupLayerAct = layerMenu->addAction(tr("&Ungroup Layer"));
-  ungroupLayerAct->setShortcut(QKeySequence(tr("Ctrl+Shift+G")));
-  ungroupLayerAct->setEnabled(false);
+  // Group / Ungroup (M5-S4). Enabled state tracks the active layer:
+  // Group Layer requires any active layer; Ungroup Layer requires the
+  // active layer to be a Group. Updated in `updateGroupActionStates()`,
+  // called from `onActiveLayerChanged()` and the menu's `aboutToShow`.
+  groupLayerAction_ = layerMenu->addAction(tr("&Group Layer"));
+  groupLayerAction_->setShortcut(QKeySequence(tr("Ctrl+G")));
+  connect(groupLayerAction_, &QAction::triggered, this,
+          &MainWindow::onLayerGroupActive);
+  ungroupLayerAction_ = layerMenu->addAction(tr("&Ungroup Layer"));
+  ungroupLayerAction_->setShortcut(QKeySequence(tr("Ctrl+Shift+G")));
+  connect(ungroupLayerAction_, &QAction::triggered, this,
+          &MainWindow::onLayerUngroupActive);
+  connect(layerMenu, &QMenu::aboutToShow, this,
+          &MainWindow::updateGroupActionStates);
+  // Initialize disabled — refreshed once a doc is loaded.
+  groupLayerAction_->setEnabled(false);
+  ungroupLayerAction_->setEnabled(false);
 
   layerMenu->addSeparator();
   auto* addMaskAct = layerMenu->addAction(tr("Add Layer &Mask"));
@@ -664,9 +672,27 @@ void MainWindow::onLayerNewGroup() {
   const LayerId id = doc_->nextLayerId();
   const LayerId prevActiveId = doc_->activeLayerId();
 
+  // Insert at active layer's parent + (active's index + 1) so the group
+  // appears immediately above the active layer (matches PS). When no
+  // active or active no longer exists, append at root top.
+  LayerId targetParentId = 0;
+  std::size_t targetIdx = doc_->tree().size();
+  if (prevActiveId != 0) {
+    if (auto loc = doc_->tree().locate(prevActiveId)) {
+      targetParentId = loc->parent ? loc->parent->id : 0;
+      targetIdx = loc->index + 1;
+    }
+  }
+
   auto stash = std::make_shared<std::unique_ptr<LayerBase>>();
 
-  auto doIt = [this, stash, name, id]() mutable {
+  auto resolveParent = [this](LayerId pid) -> GroupLayer* {
+    if (pid == 0) return nullptr;
+    return dynamic_cast<GroupLayer*>(doc_->tree().findById(pid));
+  };
+
+  auto doIt = [this, stash, name, id, targetParentId, targetIdx,
+               resolveParent]() mutable {
     std::unique_ptr<LayerBase> layer;
     if (*stash) {
       layer = std::move(*stash);
@@ -678,13 +704,15 @@ void MainWindow::onLayerNewGroup() {
       // no mask, opacity 1.
       layer = std::move(g);
     }
-    doc_->tree().add(std::move(layer));
+    doc_->tree().insertAtPath(resolveParent(targetParentId), targetIdx,
+                               std::move(layer));
     doc_->setActiveLayerId(id);
     refreshAfterUndoRedo();
   };
-  auto undoIt = [this, stash, prevActiveId]() mutable {
-    const std::size_t lastIdx = doc_->tree().size() - 1;
-    *stash = doc_->tree().removeAt(lastIdx);
+  auto undoIt = [this, stash, prevActiveId, targetParentId, targetIdx,
+                 resolveParent]() mutable {
+    *stash = doc_->tree().removeFromPath(resolveParent(targetParentId),
+                                          targetIdx);
     doc_->setActiveLayerId(prevActiveId);
     refreshAfterUndoRedo();
   };
@@ -693,6 +721,180 @@ void MainWindow::onLayerNewGroup() {
   undoStack_->push(std::make_unique<LayerOpCommand>("New Group",
                                                     std::move(doIt),
                                                     std::move(undoIt)));
+}
+
+void MainWindow::onLayerGroupActive() {
+  if (!doc_) return;
+  const LayerId activeId = doc_->activeLayerId();
+  if (activeId == 0) return;
+  auto loc = doc_->tree().locate(activeId);
+  if (!loc) return;
+
+  // Capture by parent id so closures survive reorders.
+  const LayerId parentId = loc->parent ? loc->parent->id : 0;
+  const std::size_t idx = loc->index;
+
+  // New group's name + id allocated up front.
+  int existingGroups = 0;
+  doc_->tree().forEach([&existingGroups](const LayerBase* l) {
+    if (l && l->kind() == LayerKind::Group) ++existingGroups;
+  });
+  const std::string groupName = "Group " + std::to_string(existingGroups + 1);
+  const LayerId groupId = doc_->nextLayerId();
+
+  // Stash the group instance for redo identity (preserves the group's id
+  // + any properties the user might tweak before further undo/redo).
+  auto stashGroup = std::make_shared<std::unique_ptr<LayerBase>>();
+
+  auto resolveParent = [this](LayerId pid) -> GroupLayer* {
+    if (pid == 0) return nullptr;
+    return dynamic_cast<GroupLayer*>(doc_->tree().findById(pid));
+  };
+
+  auto doIt = [this, stashGroup, groupName, groupId, activeId, parentId,
+               idx, resolveParent]() mutable {
+    GroupLayer* parent = resolveParent(parentId);
+    auto layer = doc_->tree().removeFromPath(parent, idx);
+    if (!layer) return;
+
+    std::unique_ptr<LayerBase> group;
+    if (*stashGroup) {
+      group = std::move(*stashGroup);
+    } else {
+      auto g = std::make_unique<GroupLayer>();
+      g->id = groupId;
+      g->name = groupName;
+      group = std::move(g);
+    }
+    auto* gPtr = static_cast<GroupLayer*>(group.get());
+    gPtr->children.insert(gPtr->children.begin(), std::move(layer));
+    doc_->tree().insertAtPath(parent, idx, std::move(group));
+    doc_->setActiveLayerId(groupId);
+    refreshAfterUndoRedo();
+    (void)activeId;  // referenced in undoIt
+  };
+  auto undoIt = [this, stashGroup, groupId, activeId, parentId, idx,
+                 resolveParent]() mutable {
+    auto loc2 = doc_->tree().locate(groupId);
+    if (!loc2) return;
+    auto group = doc_->tree().removeFromPath(loc2->parent, loc2->index);
+    if (!group) return;
+    auto* gPtr = static_cast<GroupLayer*>(group.get());
+    if (gPtr->children.empty()) return;  // defensive — should never happen
+    auto layer = std::move(gPtr->children.front());
+    gPtr->children.erase(gPtr->children.begin());
+    doc_->tree().insertAtPath(resolveParent(parentId), idx, std::move(layer));
+    *stashGroup = std::move(group);
+    doc_->setActiveLayerId(activeId);
+    refreshAfterUndoRedo();
+  };
+
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>("Group Layer",
+                                                    std::move(doIt),
+                                                    std::move(undoIt)));
+}
+
+void MainWindow::onLayerUngroupActive() {
+  if (!doc_) return;
+  LayerBase* active = doc_->activeLayer();
+  if (!active || active->kind() != LayerKind::Group) return;
+  auto* g = static_cast<GroupLayer*>(active);
+  const LayerId groupId = g->id;
+  auto loc = doc_->tree().locate(groupId);
+  if (!loc) return;
+
+  const LayerId parentId = loc->parent ? loc->parent->id : 0;
+  const std::size_t groupIdx = loc->index;
+  // Snapshot child ids (in stored order, child[0] = bottom of group) so
+  // undo can re-collect them by id regardless of any subsequent reorders.
+  std::vector<LayerId> childIds;
+  childIds.reserve(g->children.size());
+  for (const auto& c : g->children) childIds.push_back(c->id);
+
+  auto stashGroup = std::make_shared<std::unique_ptr<LayerBase>>();
+
+  auto resolveParent = [this](LayerId pid) -> GroupLayer* {
+    if (pid == 0) return nullptr;
+    return dynamic_cast<GroupLayer*>(doc_->tree().findById(pid));
+  };
+
+  auto doIt = [this, stashGroup, groupId, parentId, groupIdx, childIds,
+               resolveParent]() mutable {
+    auto loc2 = doc_->tree().locate(groupId);
+    if (!loc2) return;
+    auto group = doc_->tree().removeFromPath(loc2->parent, loc2->index);
+    if (!group) return;
+    auto* gPtr = static_cast<GroupLayer*>(group.get());
+
+    // Promote children: child[i] lands at parent[groupIdx + i] so bottom-
+    // up order matches the group's internal order. We iterate in order
+    // and call insertAtPath which inserts BEFORE the index, so adjacent
+    // inserts stack correctly.
+    GroupLayer* parent = resolveParent(parentId);
+    for (std::size_t i = 0; i < gPtr->children.size(); ++i) {
+      doc_->tree().insertAtPath(parent, groupIdx + i,
+                                 std::move(gPtr->children[i]));
+    }
+    gPtr->children.clear();
+    *stashGroup = std::move(group);
+
+    // Active = bottom-most ex-child. For an empty group, fall back to
+    // whatever now occupies parent[groupIdx] (the layer that used to be
+    // immediately above the group), or the parent itself, or none.
+    if (!childIds.empty()) {
+      doc_->setActiveLayerId(childIds.front());
+    } else {
+      LayerId fallback = 0;
+      if (parent) {
+        if (groupIdx < parent->children.size()) {
+          fallback = parent->children[groupIdx]->id;
+        } else if (!parent->children.empty()) {
+          fallback = parent->children.back()->id;
+        } else {
+          fallback = parent->id;
+        }
+      } else {
+        if (groupIdx < doc_->tree().size()) {
+          fallback = doc_->tree().at(groupIdx)->id;
+        } else if (!doc_->tree().empty()) {
+          fallback = doc_->tree().at(doc_->tree().size() - 1)->id;
+        }
+      }
+      doc_->setActiveLayerId(fallback);
+    }
+    refreshAfterUndoRedo();
+  };
+  auto undoIt = [this, stashGroup, groupId, parentId, groupIdx, childIds,
+                 resolveParent]() mutable {
+    if (!*stashGroup) return;
+    // Pull each promoted child out by id and re-collect in original order.
+    auto* gPtr = static_cast<GroupLayer*>(stashGroup->get());
+    for (LayerId id : childIds) {
+      auto loc2 = doc_->tree().locate(id);
+      if (!loc2) continue;
+      auto child = doc_->tree().removeFromPath(loc2->parent, loc2->index);
+      if (child) gPtr->children.push_back(std::move(child));
+    }
+    auto group = std::move(*stashGroup);
+    doc_->tree().insertAtPath(resolveParent(parentId), groupIdx,
+                               std::move(group));
+    doc_->setActiveLayerId(groupId);
+    refreshAfterUndoRedo();
+  };
+
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>("Ungroup Layer",
+                                                    std::move(doIt),
+                                                    std::move(undoIt)));
+}
+
+void MainWindow::updateGroupActionStates() {
+  if (!groupLayerAction_ || !ungroupLayerAction_) return;
+  const LayerBase* active = doc_ ? doc_->activeLayer() : nullptr;
+  groupLayerAction_->setEnabled(active != nullptr);
+  ungroupLayerAction_->setEnabled(active != nullptr &&
+                                   active->kind() == LayerKind::Group);
 }
 
 void MainWindow::onLayerAdd() {
@@ -770,19 +972,38 @@ void MainWindow::onLayerDelete() {
 
 void MainWindow::onLayerMoveUp() {
   if (!doc_) return;
-  const int i = doc_->activeLayerIndex();
-  if (i < 0 || i + 1 >= static_cast<int>(doc_->tree().size())) return;
-  const std::size_t from = static_cast<std::size_t>(i);
-  const std::size_t to = from + 1;
   const LayerId activeId = doc_->activeLayerId();
+  if (activeId == 0) return;
+  auto loc = doc_->tree().locate(activeId);
+  if (!loc) return;
+  GroupLayer* parent = loc->parent;
+  const std::size_t siblingCount = parent ? parent->children.size()
+                                           : doc_->tree().size();
+  if (loc->index + 1 >= siblingCount) {
+    statusBar()->showMessage(
+        parent ? tr("Already at top of group")
+               : tr("Already at top of stack"),
+        1500);
+    return;
+  }
+  const std::size_t from = loc->index;
+  const std::size_t to = from + 1;
+  const LayerId parentId = parent ? parent->id : 0;
 
-  auto doIt = [this, from, to, activeId]() {
-    doc_->tree().move(from, to);
+  auto resolveParent = [this](LayerId pid) -> GroupLayer* {
+    if (pid == 0) return nullptr;
+    return dynamic_cast<GroupLayer*>(doc_->tree().findById(pid));
+  };
+
+  auto doIt = [this, parentId, from, to, activeId, resolveParent]() {
+    GroupLayer* p = resolveParent(parentId);
+    doc_->tree().move(p, from, p, to);
     doc_->setActiveLayerId(activeId);
     refreshAfterUndoRedo();
   };
-  auto undoIt = [this, from, to, activeId]() {
-    doc_->tree().move(to, from);
+  auto undoIt = [this, parentId, from, to, activeId, resolveParent]() {
+    GroupLayer* p = resolveParent(parentId);
+    doc_->tree().move(p, to, p, from);
     doc_->setActiveLayerId(activeId);
     refreshAfterUndoRedo();
   };
@@ -795,19 +1016,36 @@ void MainWindow::onLayerMoveUp() {
 
 void MainWindow::onLayerMoveDown() {
   if (!doc_) return;
-  const int i = doc_->activeLayerIndex();
-  if (i <= 0) return;
-  const std::size_t from = static_cast<std::size_t>(i);
-  const std::size_t to = from - 1;
   const LayerId activeId = doc_->activeLayerId();
+  if (activeId == 0) return;
+  auto loc = doc_->tree().locate(activeId);
+  if (!loc) return;
+  GroupLayer* parent = loc->parent;
+  if (loc->index == 0) {
+    statusBar()->showMessage(
+        parent ? tr("Already at bottom of group")
+               : tr("Already at bottom of stack"),
+        1500);
+    return;
+  }
+  const std::size_t from = loc->index;
+  const std::size_t to = from - 1;
+  const LayerId parentId = parent ? parent->id : 0;
 
-  auto doIt = [this, from, to, activeId]() {
-    doc_->tree().move(from, to);
+  auto resolveParent = [this](LayerId pid) -> GroupLayer* {
+    if (pid == 0) return nullptr;
+    return dynamic_cast<GroupLayer*>(doc_->tree().findById(pid));
+  };
+
+  auto doIt = [this, parentId, from, to, activeId, resolveParent]() {
+    GroupLayer* p = resolveParent(parentId);
+    doc_->tree().move(p, from, p, to);
     doc_->setActiveLayerId(activeId);
     refreshAfterUndoRedo();
   };
-  auto undoIt = [this, from, to, activeId]() {
-    doc_->tree().move(to, from);
+  auto undoIt = [this, parentId, from, to, activeId, resolveParent]() {
+    GroupLayer* p = resolveParent(parentId);
+    doc_->tree().move(p, to, p, from);
     doc_->setActiveLayerId(activeId);
     refreshAfterUndoRedo();
   };
@@ -828,6 +1066,10 @@ void MainWindow::onActiveLayerChanged() {
   // leave the dock at its empty state — explicit fx-thumb click on a
   // dialog-only adjustment kind still opens the modal.
   bindActiveAdjustmentToDock();
+  // M5-S4: keep the Group / Ungroup menu actions in sync so their
+  // keyboard shortcuts honor the current state without waiting for the
+  // menu's `aboutToShow`.
+  updateGroupActionStates();
 }
 
 void MainWindow::onLayerPainted() {

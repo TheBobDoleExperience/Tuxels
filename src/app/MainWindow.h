@@ -8,6 +8,8 @@
 #include "core/Histogram.h"
 #include "tools/ToolId.h"
 
+class QAction;
+
 namespace tuxels {
 
 class BrushTool;
@@ -45,6 +47,8 @@ class MainWindow : public QMainWindow {
   void onEditRedo();
   void onLayerAdd();
   void onLayerNewGroup();
+  void onLayerGroupActive();
+  void onLayerUngroupActive();
   void onLayerAddLevels();
   void onLayerAddCurves();
   void onLayerAddBrightnessContrast();
@@ -96,6 +100,11 @@ class MainWindow : public QMainWindow {
   // If the active layer is an adjustment with a Properties pane, bind the
   // dock to it. Else show the empty state.
   void bindActiveAdjustmentToDock();
+  // M5-S4: enable/disable the Group Layer + Ungroup Layer menu actions
+  // based on the current active-layer state. Called when the active layer
+  // changes and when the Layer menu is about to show. Keyboard shortcuts
+  // (Ctrl+G / Ctrl+Shift+G) inherit the QAction's enabled state.
+  void updateGroupActionStates();
 
   std::unique_ptr<Document> doc_;
   std::unique_ptr<BrushTool> brushTool_;
@@ -114,6 +123,11 @@ class MainWindow : public QMainWindow {
   ToolsPanel* toolsPanel_ = nullptr;
   PropertiesDock* propertiesDock_ = nullptr;
   ToolId activeToolId_ = ToolId::Brush;
+  // Group menu actions kept as members so `updateGroupActionStates()` can
+  // toggle their enabled state in sync with the active layer (keyboard
+  // shortcuts honor the QAction enable bit).
+  QAction* groupLayerAction_ = nullptr;
+  QAction* ungroupLayerAction_ = nullptr;
 };
 
 }  // namespace tuxels
