@@ -18,6 +18,7 @@
 #include "geom/Spline.h"
 #include "layers/BrightnessContrast.h"
 #include "layers/CurvesAdjustment.h"
+#include "layers/GroupLayer.h"
 #include "layers/HueSaturation.h"
 #include "layers/LayerBase.h"
 #include "layers/LayerMask.h"
@@ -29,7 +30,8 @@ namespace tuxels {
 namespace {
 
 constexpr char kMagic[8] = {'T', 'U', 'X', 'E', 'L', 'S', '\x01', '\x00'};
-constexpr uint32_t kVersionCurrent = 4;
+constexpr uint32_t kVersionCurrent = 5;
+constexpr uint32_t kVersionV4 = 4;
 constexpr uint32_t kVersionV3 = 3;
 constexpr uint32_t kVersionV2 = 2;
 constexpr uint32_t kVersionV1 = 1;
@@ -39,6 +41,8 @@ constexpr uint8_t kLayerKindLevels = 2;
 constexpr uint8_t kLayerKindCurves = 3;
 constexpr uint8_t kLayerKindHueSaturation = 4;
 constexpr uint8_t kLayerKindBrightnessContrast = 5;
+constexpr uint8_t kLayerKindOpenGroup = 10;
+constexpr uint8_t kLayerKindCloseGroup = 11;
 
 // Host-order writes. Tuxels only targets little-endian hosts (Linux x86_64
 // in M1); a future version can add an endian marker to `Flags` if we ever
@@ -107,6 +111,7 @@ void setErr(std::string* err, std::string msg) {
 
 uint8_t kindByte(const LayerBase& layer) {
   if (layer.kind() == LayerKind::Pixel) return kLayerKindPixel;
+  if (layer.kind() == LayerKind::Group) return kLayerKindOpenGroup;
   if (dynamic_cast<const LevelsAdjustment*>(&layer)) return kLayerKindLevels;
   if (dynamic_cast<const CurvesAdjustment*>(&layer)) return kLayerKindCurves;
   if (dynamic_cast<const HueSaturation*>(&layer)) return kLayerKindHueSaturation;
@@ -114,6 +119,30 @@ uint8_t kindByte(const LayerBase& layer) {
     return kLayerKindBrightnessContrast;
   // Unknown adjustment subclass — caller treats 0 as an error sentinel.
   return 0;
+}
+
+// Total number of records this subtree contributes to the on-disk layer
+// stream. Pixel + adjustment kinds are 1 record each; groups are 2 (open +
+// close) plus the recursive count of their children.
+uint32_t countRecords(const LayerBase& layer) {
+  if (layer.kind() == LayerKind::Group) {
+    const auto& g = static_cast<const GroupLayer&>(layer);
+    uint32_t n = 2;
+    for (const auto& child : g.children) {
+      if (child) n += countRecords(*child);
+    }
+    return n;
+  }
+  return 1;
+}
+
+uint32_t countRecordsList(
+    const std::vector<std::unique_ptr<LayerBase>>& layers) {
+  uint32_t n = 0;
+  for (const auto& l : layers) {
+    if (l) n += countRecords(*l);
+  }
+  return n;
 }
 
 bool writeLevelsDescriptor(std::ofstream& out,
@@ -211,58 +240,36 @@ bool readBrightnessContrastDescriptor(std::ifstream& in,
   return true;
 }
 
-}  // namespace
-
-bool saveTxl(const std::string& path, const Document& doc, std::string* err) {
-  std::ofstream out(path, std::ios::binary | std::ios::trunc);
-  if (!out) {
-    setErr(err, "Could not open file for writing: " + path);
-    return false;
-  }
-
-  out.write(kMagic, 8);
-  if (!out.good()) { setErr(err, "Failed writing magic"); return false; }
-
-  writeRaw(out, kVersionCurrent);
-  writeRaw(out, static_cast<uint32_t>(0));  // Flags
-
-  writeRaw(out, static_cast<uint32_t>(doc.width()));
-  writeRaw(out, static_cast<uint32_t>(doc.height()));
-
-  writeRaw(out, static_cast<int32_t>(doc.activeLayerIndex()));
-
-  writeRaw(out, static_cast<uint8_t>(
-                    doc.paintTarget() == PaintTarget::Mask ? 1 : 0));
-  const bool hasSelection = doc.selection() != nullptr;
-  writeRaw(out, static_cast<uint8_t>(hasSelection ? 1 : 0));
-  writeRaw(out, static_cast<uint16_t>(0));  // Reserved
-
-  const auto& tree = doc.tree();
-  writeRaw(out, static_cast<uint32_t>(tree.size()));
-
-  for (std::size_t i = 0; i < tree.size(); ++i) {
-    const LayerBase* layer = tree.at(i);
+// Recursive layer-record writer. Pixel + adjustment kinds emit a single
+// record; groups emit OpenGroup → recurse children → CloseGroup. The
+// CloseGroup record is header-only (no NumImageTiles, no descriptor, no
+// mask block) — reader bails out after reading the header when kind == 11.
+bool writeLayerRecords(std::ofstream& out,
+                       const std::vector<std::unique_ptr<LayerBase>>& layers,
+                       std::string* err) {
+  for (const auto& up : layers) {
+    const LayerBase* layer = up.get();
+    if (!layer) continue;
     const uint8_t kind = kindByte(*layer);
     if (kind == 0) {
-      setErr(err, "Unsupported layer subclass at layer index " +
-                      std::to_string(i));
+      setErr(err, "Unsupported layer subclass: " + layer->name);
       return false;
     }
 
+    // Common record header (matches the existing pixel/adjustment shape so
+    // the reader's pre-name parsing path is uniform across all kinds).
     writeRaw(out, static_cast<uint64_t>(layer->id));
     writeRaw(out, kind);
     writeRaw(out, static_cast<uint8_t>(layer->visible ? 1 : 0));
     writeRaw(out, static_cast<uint8_t>(
                       (layer->mask && layer->mask->enabled) ? 1 : 0));
     writeRaw(out, static_cast<uint8_t>(layer->mask ? 1 : 0));
-    // v4+: ClipToBelow byte. Pre-v4 readers will misalign here, but the
-    // version gate up top blocks them.
     writeRaw(out, static_cast<uint8_t>(layer->clipToBelow ? 1 : 0));
     writeRaw(out, layer->opacity);
     writeRaw(out, static_cast<uint32_t>(layer->blend));
 
-    // Adjustment layers carry no backing image — their dims / origin are
-    // sentinel zeros on disk; masks are doc-sized (reconstructed on load).
+    // Pixel kinds carry the layer's backing-image dims + origin; non-pixel
+    // kinds (adjustments, groups) write zeros.
     if (kind == kLayerKindPixel) {
       const auto* px = static_cast<const PixelLayer*>(layer);
       writeRaw(out, static_cast<uint32_t>(px->image.width()));
@@ -286,9 +293,15 @@ bool saveTxl(const std::string& path, const Document& doc, std::string* err) {
         setErr(err, "Failed writing layer image tiles");
         return false;
       }
+    } else if (kind == kLayerKindOpenGroup) {
+      const auto* g = static_cast<const GroupLayer*>(layer);
+      // NumImageTiles = 0 sentinel for shape uniformity with pixel kinds.
+      writeRaw(out, static_cast<uint32_t>(0));
+      // Group descriptor: 1 byte IsExpanded.
+      writeRaw(out, static_cast<uint8_t>(g->isExpanded ? 1 : 0));
     } else {
-      // Adjustment kinds: NumImageTiles = 0 sentinel for shape uniformity,
-      // followed by the kind-specific descriptor.
+      // Adjustment kinds: NumImageTiles = 0 sentinel + kind-specific
+      // descriptor (no change from v4).
       writeRaw(out, static_cast<uint32_t>(0));
       if (kind == kLayerKindLevels) {
         const auto* lv = dynamic_cast<const LevelsAdjustment*>(layer);
@@ -321,6 +334,9 @@ bool saveTxl(const std::string& path, const Document& doc, std::string* err) {
       }
     }
 
+    // Mask block (always present for pixel + adjustment + group records).
+    // Pixel layers carry layer-sized masks; adjustments + groups carry
+    // doc-sized masks (reader reconstructs at doc dims for non-pixel kinds).
     if (layer->mask) {
       if (!writeImage(out, layer->mask->image)) {
         setErr(err, "Failed writing mask tiles");
@@ -329,7 +345,63 @@ bool saveTxl(const std::string& path, const Document& doc, std::string* err) {
     } else {
       writeRaw(out, static_cast<uint32_t>(0));
     }
+
+    if (kind == kLayerKindOpenGroup) {
+      const auto* g = static_cast<const GroupLayer*>(layer);
+      // Recurse into the group's children.
+      if (!writeLayerRecords(out, g->children, err)) return false;
+      // CloseGroup record — header-only marker, all-zero fields after the
+      // kind byte. NameLen = 0 so no name bytes follow; reader detects
+      // kind == 11 right after the name and stops parsing the record.
+      writeRaw(out, static_cast<uint64_t>(0));        // id sentinel
+      writeRaw(out, kLayerKindCloseGroup);
+      writeRaw(out, static_cast<uint8_t>(0));         // visible
+      writeRaw(out, static_cast<uint8_t>(0));         // maskEnabled
+      writeRaw(out, static_cast<uint8_t>(0));         // hasMask
+      writeRaw(out, static_cast<uint8_t>(0));         // clipToBelow
+      writeRaw(out, static_cast<float>(0));           // opacity
+      writeRaw(out, static_cast<uint32_t>(0));        // blend
+      writeRaw(out, static_cast<uint32_t>(0));        // W
+      writeRaw(out, static_cast<uint32_t>(0));        // H
+      writeRaw(out, static_cast<int32_t>(0));         // OriginX
+      writeRaw(out, static_cast<int32_t>(0));         // OriginY
+      writeRaw(out, static_cast<uint32_t>(0));        // NameLen=0 (no name)
+      // No NumImageTiles, no descriptor, no mask block — record ends here.
+    }
   }
+  return out.good();
+}
+
+}  // namespace
+
+bool saveTxl(const std::string& path, const Document& doc, std::string* err) {
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  if (!out) {
+    setErr(err, "Could not open file for writing: " + path);
+    return false;
+  }
+
+  out.write(kMagic, 8);
+  if (!out.good()) { setErr(err, "Failed writing magic"); return false; }
+
+  writeRaw(out, kVersionCurrent);
+  writeRaw(out, static_cast<uint32_t>(0));  // Flags
+
+  writeRaw(out, static_cast<uint32_t>(doc.width()));
+  writeRaw(out, static_cast<uint32_t>(doc.height()));
+
+  writeRaw(out, static_cast<int32_t>(doc.activeLayerIndex()));
+
+  writeRaw(out, static_cast<uint8_t>(
+                    doc.paintTarget() == PaintTarget::Mask ? 1 : 0));
+  const bool hasSelection = doc.selection() != nullptr;
+  writeRaw(out, static_cast<uint8_t>(hasSelection ? 1 : 0));
+  writeRaw(out, static_cast<uint16_t>(0));  // Reserved
+
+  const auto& tree = doc.tree();
+  writeRaw(out, countRecordsList(tree.raw()));
+
+  if (!writeLayerRecords(out, tree.raw(), err)) return false;
 
   if (hasSelection) {
     if (!writeImage(out, doc.selection()->image())) {
@@ -363,8 +435,9 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
 
   uint32_t version = 0, flags = 0;
   readRaw(in, version);
-  if (version != kVersionCurrent && version != kVersionV3 &&
-      version != kVersionV2 && version != kVersionV1) {
+  if (version != kVersionCurrent && version != kVersionV4 &&
+      version != kVersionV3 && version != kVersionV2 &&
+      version != kVersionV1) {
     setErr(err, "Unsupported .txl version: " + std::to_string(version));
     return std::nullopt;
   }
@@ -375,7 +448,8 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
   }
   const bool hasOriginFields = (version >= kVersionV2);
   const bool acceptsAdjustmentKinds = (version >= kVersionV3);
-  const bool hasClipByte = (version >= kVersionCurrent);
+  const bool hasClipByte = (version >= kVersionV4);
+  const bool acceptsGroupKinds = (version >= kVersionCurrent);
 
   uint32_t w = 0, h = 0;
   int32_t activeLayer = 0;
@@ -403,6 +477,19 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
   auto doc = std::make_unique<Document>(static_cast<int>(w),
                                          static_cast<int>(h));
   LayerId maxId = 0;
+
+  // Group nesting stack. Empty = at root level. OpenGroup pushes; CloseGroup
+  // pops; non-group records attach to `groupStack.back()->children` if the
+  // stack is non-empty, otherwise to `doc->tree()` (root).
+  std::vector<GroupLayer*> groupStack;
+
+  auto attach = [&](std::unique_ptr<LayerBase> l) {
+    if (groupStack.empty()) {
+      doc->tree().add(std::move(l));
+    } else {
+      groupStack.back()->children.push_back(std::move(l));
+    }
+  };
 
   for (uint32_t li = 0; li < numLayers; ++li) {
     uint64_t id = 0;
@@ -432,11 +519,32 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
       setErr(err, "Truncated layer header at index " + std::to_string(li));
       return std::nullopt;
     }
+
+    // CloseGroup is a header-only marker — pop the group stack and skip
+    // the rest of the record. Validate balance + version gate first.
+    if (kind == kLayerKindCloseGroup) {
+      if (!acceptsGroupKinds) {
+        setErr(err, "CloseGroup record requires .txl v5 or later");
+        return std::nullopt;
+      }
+      if (nameLen != 0) {
+        setErr(err, "CloseGroup record must have empty name");
+        return std::nullopt;
+      }
+      if (groupStack.empty()) {
+        setErr(err, "Unbalanced CloseGroup at record " + std::to_string(li));
+        return std::nullopt;
+      }
+      groupStack.pop_back();
+      continue;
+    }
+
     const bool isAdjustmentKind =
         (kind == kLayerKindLevels || kind == kLayerKindCurves ||
          kind == kLayerKindHueSaturation ||
          kind == kLayerKindBrightnessContrast);
-    if (kind != kLayerKindPixel && !isAdjustmentKind) {
+    const bool isGroupOpen = (kind == kLayerKindOpenGroup);
+    if (kind != kLayerKindPixel && !isAdjustmentKind && !isGroupOpen) {
       setErr(err, "Unknown layer kind " + std::to_string(kind) +
                       " at index " + std::to_string(li));
       return std::nullopt;
@@ -444,6 +552,10 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
     if (isAdjustmentKind && !acceptsAdjustmentKinds) {
       setErr(err, "Layer kind " + std::to_string(kind) +
                       " requires .txl v3 or later");
+      return std::nullopt;
+    }
+    if (isGroupOpen && !acceptsGroupKinds) {
+      setErr(err, "OpenGroup record requires .txl v5 or later");
       return std::nullopt;
     }
     if (nameLen > (1u << 20)) {
@@ -477,6 +589,25 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
         return std::nullopt;
       }
       layer = std::move(px);
+    } else if (isGroupOpen) {
+      // OpenGroup: NumImageTiles == 0 sentinel, then 1-byte IsExpanded.
+      uint32_t numImageTiles = 0;
+      if (!readRaw(in, numImageTiles)) {
+        setErr(err, "Truncated group image-tile count");
+        return std::nullopt;
+      }
+      if (numImageTiles != 0) {
+        setErr(err, "Group record must have 0 image tiles");
+        return std::nullopt;
+      }
+      uint8_t isExpanded = 1;
+      if (!readRaw(in, isExpanded)) {
+        setErr(err, "Truncated group descriptor");
+        return std::nullopt;
+      }
+      auto g = std::make_unique<GroupLayer>();
+      g->isExpanded = (isExpanded != 0);
+      layer = std::move(g);
     } else {
       // Adjustment layers: expect NumImageTiles == 0 sentinel, then descriptor.
       uint32_t numImageTiles = 0;
@@ -536,8 +667,9 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
     layer->clipToBelow = (clipToBelow != 0);
 
     if (hasMask) {
-      // Pixel masks match the backing image; adjustment masks are doc-sized
-      // per the `Document::addAdjustmentLayer` invariant.
+      // Pixel masks match the backing image; adjustment + group masks are
+      // doc-sized (matches `Document::addAdjustmentLayer`'s auto-mask
+      // invariant and the M5 group-mask convention).
       const int maskW = (kind == kLayerKindPixel) ? static_cast<int>(layerW)
                                                    : static_cast<int>(w);
       const int maskH = (kind == kLayerKindPixel) ? static_cast<int>(layerH)
@@ -559,7 +691,23 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
     }
 
     if (id > maxId) maxId = id;
-    doc->tree().add(std::move(layer));
+
+    if (isGroupOpen) {
+      // Attach the group to its parent first, then push onto the stack so
+      // subsequent records become children. We hold a non-owning pointer
+      // for the stack; ownership transfers to the parent's children vector.
+      GroupLayer* gPtr = static_cast<GroupLayer*>(layer.get());
+      attach(std::move(layer));
+      groupStack.push_back(gPtr);
+    } else {
+      attach(std::move(layer));
+    }
+  }
+
+  if (!groupStack.empty()) {
+    setErr(err, "Unclosed group at end of layer stream (" +
+                    std::to_string(groupStack.size()) + " open)");
+    return std::nullopt;
   }
 
   doc->setLayerIdCounter(maxId);

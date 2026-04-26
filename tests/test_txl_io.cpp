@@ -15,6 +15,7 @@
 #include "io/TxlIO.h"
 #include "layers/BrightnessContrast.h"
 #include "layers/CurvesAdjustment.h"
+#include "layers/GroupLayer.h"
 #include "layers/HueSaturation.h"
 #include "layers/LayerMask.h"
 #include "layers/LevelsAdjustment.h"
@@ -725,6 +726,285 @@ TEST(txl_v3_file_loads_with_clipToBelow_false) {
   CHECK(loaded.has_value());
   CHECK_EQ(static_cast<int>((*loaded)->tree().size()), 1);
   CHECK(!(*loaded)->tree().at(0)->clipToBelow);
+}
+
+TEST(txl_v5_round_trip_empty_group) {
+  const std::string path = tmpPath("v5_empty_group");
+  PathGuard g{path};
+
+  auto doc = std::make_unique<Document>(16, 16);
+  auto grp = std::make_unique<GroupLayer>();
+  grp->id = 100;
+  grp->name = "Empty Folder";
+  doc->tree().add(std::move(grp));
+
+  std::string err;
+  CHECK(saveTxl(path, *doc, &err));
+
+  auto loaded = loadTxl(path, &err);
+  CHECK(loaded.has_value());
+  CHECK_EQ((*loaded)->tree().size(), std::size_t{1});
+  auto* loadedGrp = dynamic_cast<GroupLayer*>((*loaded)->tree().at(0));
+  CHECK(loadedGrp != nullptr);
+  CHECK(loadedGrp->children.empty());
+  CHECK_EQ(loadedGrp->name, std::string("Empty Folder"));
+  CHECK_EQ(loadedGrp->id, LayerId{100});
+}
+
+TEST(txl_v5_round_trip_group_with_three_pixel_children) {
+  const std::string path = tmpPath("v5_group_3children");
+  PathGuard g{path};
+
+  auto doc = std::make_unique<Document>(16, 16);
+  auto grp = std::make_unique<GroupLayer>();
+  grp->id = 200;
+  grp->name = "Trio";
+  for (int i = 0; i < 3; ++i) {
+    auto px = std::make_unique<PixelLayer>(16, 16);
+    px->id = 201 + i;
+    px->name = "child " + std::to_string(i);
+    px->image.fill(i == 0 ? kRed : i == 1 ? kGreen : kBlue);
+    grp->children.push_back(std::move(px));
+  }
+  doc->tree().add(std::move(grp));
+
+  std::string err;
+  CHECK(saveTxl(path, *doc, &err));
+  auto loaded = loadTxl(path, &err);
+  CHECK(loaded.has_value());
+  CHECK_EQ((*loaded)->tree().size(), std::size_t{1});
+  auto* loadedGrp = dynamic_cast<GroupLayer*>((*loaded)->tree().at(0));
+  CHECK(loadedGrp != nullptr);
+  CHECK_EQ(loadedGrp->children.size(), std::size_t{3});
+  for (std::size_t i = 0; i < 3; ++i) {
+    auto* px = dynamic_cast<PixelLayer*>(loadedGrp->children[i].get());
+    CHECK(px != nullptr);
+    CHECK_EQ(px->id, LayerId{201 + i});
+  }
+  // Spot-check a pixel — the green child.
+  CHECK(approxEqual(
+      dynamic_cast<PixelLayer*>(loadedGrp->children[1].get())->image.getPixel(
+          4, 4),
+      kGreen));
+}
+
+TEST(txl_v5_round_trip_nested_groups_three_deep) {
+  const std::string path = tmpPath("v5_nested");
+  PathGuard g{path};
+
+  auto doc = std::make_unique<Document>(8, 8);
+  // outer { middle { inner { pixel } } }
+  auto inner = std::make_unique<GroupLayer>();
+  inner->id = 33;
+  inner->name = "inner";
+  auto px = std::make_unique<PixelLayer>(8, 8);
+  px->id = 34;
+  px->image.fill(kBlue);
+  inner->children.push_back(std::move(px));
+
+  auto middle = std::make_unique<GroupLayer>();
+  middle->id = 32;
+  middle->name = "middle";
+  middle->children.push_back(std::move(inner));
+
+  auto outer = std::make_unique<GroupLayer>();
+  outer->id = 31;
+  outer->name = "outer";
+  outer->children.push_back(std::move(middle));
+
+  doc->tree().add(std::move(outer));
+
+  std::string err;
+  CHECK(saveTxl(path, *doc, &err));
+  auto loaded = loadTxl(path, &err);
+  CHECK(loaded.has_value());
+  // Walk the chain.
+  auto* o = dynamic_cast<GroupLayer*>((*loaded)->tree().at(0));
+  CHECK(o != nullptr);
+  CHECK_EQ(o->name, std::string("outer"));
+  CHECK_EQ(o->children.size(), std::size_t{1});
+  auto* m = dynamic_cast<GroupLayer*>(o->children[0].get());
+  CHECK(m != nullptr);
+  CHECK_EQ(m->name, std::string("middle"));
+  CHECK_EQ(m->children.size(), std::size_t{1});
+  auto* i = dynamic_cast<GroupLayer*>(m->children[0].get());
+  CHECK(i != nullptr);
+  CHECK_EQ(i->name, std::string("inner"));
+  CHECK_EQ(i->children.size(), std::size_t{1});
+  auto* leaf = dynamic_cast<PixelLayer*>(i->children[0].get());
+  CHECK(leaf != nullptr);
+  CHECK(approxEqual(leaf->image.getPixel(2, 2), kBlue));
+  CHECK_EQ(leaf->id, LayerId{34});
+}
+
+TEST(txl_v5_round_trip_group_attributes) {
+  const std::string path = tmpPath("v5_group_attrs");
+  PathGuard g{path};
+
+  auto doc = std::make_unique<Document>(16, 16);
+  auto grp = std::make_unique<GroupLayer>();
+  grp->id = 42;
+  grp->name = "Loaded Folder";
+  grp->visible = true;
+  grp->opacity = 0.7f;
+  grp->blend = BlendMode::Multiply;
+  grp->clipToBelow = true;
+  grp->isExpanded = false;
+  // Doc-sized mask, half-opaque on the right half.
+  auto mask = std::make_unique<LayerMask>(16, 16);
+  for (int y = 0; y < 16; ++y) {
+    for (int x = 0; x < 16; ++x) {
+      mask->image.setPixel(x, y,
+                            x < 8 ? Rgba32F{0.f, 0.f, 0.f, 1.f}
+                                  : Rgba32F{1.f, 1.f, 1.f, 1.f});
+    }
+  }
+  mask->enabled = true;
+  grp->mask = std::move(mask);
+  // A child so the group isn't degenerate.
+  auto child = std::make_unique<PixelLayer>(16, 16);
+  child->id = 43;
+  child->image.fill(kRed);
+  grp->children.push_back(std::move(child));
+  doc->tree().add(std::move(grp));
+
+  std::string err;
+  CHECK(saveTxl(path, *doc, &err));
+  auto loaded = loadTxl(path, &err);
+  CHECK(loaded.has_value());
+
+  auto* lg = dynamic_cast<GroupLayer*>((*loaded)->tree().at(0));
+  CHECK(lg != nullptr);
+  CHECK_EQ(lg->name, std::string("Loaded Folder"));
+  CHECK_EQ(lg->id, LayerId{42});
+  CHECK_NEAR(lg->opacity, 0.7f, 1e-5f);
+  CHECK(lg->blend == BlendMode::Multiply);
+  CHECK(lg->clipToBelow);
+  CHECK(!lg->isExpanded);
+  CHECK(lg->visible);
+  // Mask round-trip + doc-size.
+  CHECK(lg->mask != nullptr);
+  CHECK(lg->mask->enabled);
+  CHECK_EQ(lg->mask->image.width(), 16);
+  CHECK_EQ(lg->mask->image.height(), 16);
+  CHECK_NEAR(lg->mask->image.getPixel(2, 2).r, 0.f, 1e-5f);
+  CHECK_NEAR(lg->mask->image.getPixel(12, 2).r, 1.f, 1e-5f);
+  // Child preserved.
+  CHECK_EQ(lg->children.size(), std::size_t{1});
+}
+
+TEST(txl_v5_round_trip_mixed_root_with_group) {
+  // root: [pixelA, group{[adjustment, pixelB]}, pixelC]
+  // Verify the full ordering, group nesting, and id stability survive a
+  // round trip.
+  const std::string path = tmpPath("v5_mixed");
+  PathGuard g{path};
+
+  auto doc = std::make_unique<Document>(8, 8);
+  auto a = std::make_unique<PixelLayer>(8, 8);
+  a->id = 1;
+  a->name = "A";
+  a->image.fill(kRed);
+  doc->tree().add(std::move(a));
+
+  auto grp = std::make_unique<GroupLayer>();
+  grp->id = 2;
+  grp->name = "G";
+  grp->blend = BlendMode::Normal;
+  auto adj = std::make_unique<LevelsAdjustment>();
+  adj->id = 3;
+  adj->name = "Lv";
+  grp->children.push_back(std::move(adj));
+  auto b = std::make_unique<PixelLayer>(8, 8);
+  b->id = 4;
+  b->name = "B";
+  b->image.fill(kGreen);
+  grp->children.push_back(std::move(b));
+  doc->tree().add(std::move(grp));
+
+  auto c = std::make_unique<PixelLayer>(8, 8);
+  c->id = 5;
+  c->name = "C";
+  c->image.fill(kBlue);
+  doc->tree().add(std::move(c));
+
+  std::string err;
+  CHECK(saveTxl(path, *doc, &err));
+  auto loaded = loadTxl(path, &err);
+  CHECK(loaded.has_value());
+
+  CHECK_EQ((*loaded)->tree().size(), std::size_t{3});
+  // Root layout: A, group, C.
+  CHECK_EQ((*loaded)->tree().at(0)->id, LayerId{1});
+  CHECK_EQ((*loaded)->tree().at(0)->name, std::string("A"));
+  CHECK_EQ((*loaded)->tree().at(2)->id, LayerId{5});
+  CHECK_EQ((*loaded)->tree().at(2)->name, std::string("C"));
+
+  auto* lg = dynamic_cast<GroupLayer*>((*loaded)->tree().at(1));
+  CHECK(lg != nullptr);
+  CHECK_EQ(lg->id, LayerId{2});
+  CHECK_EQ(lg->name, std::string("G"));
+  CHECK_EQ(lg->children.size(), std::size_t{2});
+  CHECK_EQ(lg->children[0]->id, LayerId{3});
+  CHECK(dynamic_cast<LevelsAdjustment*>(lg->children[0].get()) != nullptr);
+  CHECK_EQ(lg->children[1]->id, LayerId{4});
+  CHECK(dynamic_cast<PixelLayer*>(lg->children[1].get()) != nullptr);
+}
+
+TEST(txl_v5_reader_accepts_v4_pixel_only_file) {
+  // Hand-craft a v4 file (pre-group format, single pixel layer with the
+  // ClipToBelow byte present) and verify it loads cleanly into the v5
+  // reader with no groups.
+  const std::string path = tmpPath("v4compat");
+  PathGuard g{path};
+  {
+    std::ofstream out(path, std::ios::binary);
+    const char magic[8] = {'T', 'U', 'X', 'E', 'L', 'S', '\x01', '\x00'};
+    out.write(magic, 8);
+    auto wU32 = [&](uint32_t v) {
+      out.write(reinterpret_cast<const char*>(&v), 4);
+    };
+    auto wU8 = [&](uint8_t v) {
+      out.write(reinterpret_cast<const char*>(&v), 1);
+    };
+    auto wI32 = [&](int32_t v) {
+      out.write(reinterpret_cast<const char*>(&v), 4);
+    };
+    auto wU64 = [&](uint64_t v) {
+      out.write(reinterpret_cast<const char*>(&v), 8);
+    };
+    wU32(4);                  // version = v4
+    wU32(0);                  // flags
+    wU32(8); wU32(8);         // doc dims
+    wI32(0);                  // active = 0
+    wU8(0); wU8(0);           // paintTarget, hasSelection
+    uint16_t reserved = 0;
+    out.write(reinterpret_cast<const char*>(&reserved), 2);
+    wU32(1);                  // num layers
+    // Pixel layer record.
+    wU64(7);                  // id
+    wU8(1);                   // kind = Pixel
+    wU8(1);                   // visible
+    wU8(0); wU8(0);           // maskEnabled, hasMask
+    wU8(1);                   // clipToBelow = true (v4 byte)
+    float opacity = 0.5f;
+    out.write(reinterpret_cast<const char*>(&opacity), 4);
+    wU32(0);                  // blend
+    wU32(8); wU32(8);         // layerW/H
+    wI32(0); wI32(0);         // originX/Y
+    wU32(0);                  // nameLen
+    wU32(0);                  // numImageTiles
+    wU32(0);                  // numMaskTiles
+  }
+  std::string err;
+  auto loaded = loadTxl(path, &err);
+  CHECK(loaded.has_value());
+  CHECK_EQ((*loaded)->tree().size(), std::size_t{1});
+  auto* px = dynamic_cast<PixelLayer*>((*loaded)->tree().at(0));
+  CHECK(px != nullptr);
+  CHECK(px->clipToBelow);
+  CHECK_NEAR(px->opacity, 0.5f, 1e-5f);
+  CHECK_EQ(px->id, LayerId{7});
 }
 
 }  // namespace tuxels
