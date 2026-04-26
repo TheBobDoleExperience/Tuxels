@@ -4,6 +4,7 @@
 #include <array>
 
 #include "core/Histogram.h"
+#include "layers/CurvesAdjustment.h"
 #include "layers/LevelsAdjustment.h"
 
 class QStackedWidget;
@@ -12,6 +13,7 @@ class QWidget;
 namespace tuxels {
 
 class LayerBase;
+class PropertiesPaneCurves;
 class PropertiesPaneLevels;
 
 // Right-side dock that hosts non-modal property editors for adjustment
@@ -33,6 +35,8 @@ class PropertiesDock : public QDockWidget {
   // histogram from the composite below the layer (matching the M3 dialog
   // behavior) and passes it in.
   void bindLevels(LevelsAdjustment* layer, Histogram4x256 hist);
+  // Bind a Curves layer + histogram backdrop (M4-S3).
+  void bindCurves(CurvesAdjustment* layer, Histogram4x256 hist);
   // Show the empty state. Called when the active layer is null or non-
   // adjustment (or an adjustment kind not yet ported to a pane).
   void bindNothing();
@@ -46,11 +50,15 @@ class PropertiesDock : public QDockWidget {
   void levelsCommitRequested(LevelsAdjustment* layer,
                              std::array<LevelsParams, 4> before,
                              std::array<LevelsParams, 4> after);
+  void curvesCommitRequested(CurvesAdjustment* layer,
+                             CurvesAdjustment::PointsArray before,
+                             CurvesAdjustment::PointsArray after);
 
  private:
   QStackedWidget* stack_ = nullptr;
   QWidget* emptyPage_ = nullptr;
   PropertiesPaneLevels* levelsPane_ = nullptr;
+  PropertiesPaneCurves* curvesPane_ = nullptr;
 };
 
 }  // namespace tuxels

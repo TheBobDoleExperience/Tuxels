@@ -187,3 +187,41 @@ Append-only. Never rewrite history. Dated entries in ISO-8601.
   nothing, second drag's `before` equals first drag's `after`,
   unbind clears layer pointer, previewChanged fires during drag.
   Headless smoke test green.
+
+### M4-S3 — Curves port
+
+- New `src/ui/CurveEditor.{h,cpp}` — Q_OBJECT widget lifted out
+  of `CurvesDialog.cpp`. Two-signal lifecycle: `previewChanged`
+  on every visible mutation; `interactionEnded` once per
+  commit-worthy gesture (mouse release after drag/add; right-click
+  after successful remove). Editor carries
+  `pendingInteractionCommit_` so a left-press-no-drag-then-release
+  on existing point doesn't fire interactionEnded. Programmatic
+  `setPoints` / `setHistogram` / `setChannel` do NOT emit signals
+  (pane uses them on bind / channel-switch).
+- New `src/ui/PropertiesPaneCurves.{h,cpp}` — mirrors
+  PropertiesPaneLevels shape: channel combo + CurveEditor +
+  histogram backdrop. Snapshot/commit discipline: bind snapshots
+  `paramsBefore_` (PointsArray, all 4 channels) + loads active
+  channel into editor. `onEditorPreviewChanged` mutates layer
+  points for active channel + re-emits previewChanged.
+  `onEditorInteractionEnded` diffs vs paramsBefore_, emits
+  `commitRequested(layer, before, after)` if changed, re-snapshots.
+  Channel switch reloads editor + re-snapshots (no commit).
+- `PropertiesDock` extended with `bindCurves(layer, hist)` +
+  `curvesCommitRequested` re-emit. New Curves pane added to the
+  internal QStackedWidget.
+- MainWindow: `onLayerAddCurves` mirrors `onLayerAddLevels`
+  line-for-line (insert identity + push LayerOpCommand + bind dock
+  + raise; Ctrl+Z removes the layer). `onEditAdjustmentRequested`
+  Curves branch becomes 2 lines (bind dock + raise).
+  `bindActiveAdjustmentToDock` extended with CurvesAdjustment
+  dispatch. New curvesCommitRequested lambda wraps the commit in
+  `LayerParamsCommand<CurvesAdjustment, CurvesAdjustment::PointsArray>`.
+- Deleted `src/ui/CurvesDialog.{h,cpp}` + CMakeLists entry.
+- 299 tests across 32 executables (was 292/31). 7 new cases in
+  `test_properties_pane_curves`: default unbound, bind takes
+  snapshot, drag/release emits one commit (mid-drag preview
+  doesn't), release without change emits nothing, second drag's
+  `before` equals first drag's `after`, channel switch doesn't
+  commit, unbind clears. Headless smoke test green.

@@ -43,7 +43,6 @@
 #include "tools/TransformTool.h"
 #include "ui/BrightnessContrastDialog.h"
 #include "ui/CanvasView.h"
-#include "ui/CurvesDialog.h"
 #include "ui/HueSatDialog.h"
 #include "ui/LayersPanel.h"
 #include "ui/PropertiesDock.h"
@@ -364,6 +363,20 @@ void MainWindow::buildDocks() {
             undoStack_->push(
                 std::make_unique<LayerParamsCommand<LevelsAdjustment, ParamArr>>(
                     layer, before, after, setter, "Edit Levels"));
+            if (canvas_) canvas_->requestRecomposite();
+          });
+  connect(propertiesDock_, &PropertiesDock::curvesCommitRequested, this,
+          [this](CurvesAdjustment* layer,
+                 CurvesAdjustment::PointsArray before,
+                 CurvesAdjustment::PointsArray after) {
+            if (!layer) return;
+            using PtArr = CurvesAdjustment::PointsArray;
+            auto setter = [](CurvesAdjustment* l, const PtArr& p) {
+              l->setAllPoints(p);
+            };
+            undoStack_->push(
+                std::make_unique<LayerParamsCommand<CurvesAdjustment, PtArr>>(
+                    layer, before, after, setter, "Edit Curves"));
             if (canvas_) canvas_->requestRecomposite();
           });
 }
@@ -1096,9 +1109,13 @@ void MainWindow::bindActiveAdjustmentToDock() {
     propertiesDock_->bindLevels(levels, histogramBelow(levels));
     return;
   }
-  // Other adjustment kinds (Curves/H-S/B&C) get their dock panes in
-  // S3/S4. Until then, leave the dock at empty state for those — the
-  // existing modal dialogs still open via `editAdjustmentRequested`.
+  if (auto* curves = dynamic_cast<CurvesAdjustment*>(layer)) {
+    propertiesDock_->bindCurves(curves, histogramBelow(curves));
+    return;
+  }
+  // Other adjustment kinds (H-S/B&C) get their dock panes in S4. Until
+  // then, leave the dock at empty state for those — the existing modal
+  // dialogs still open via `editAdjustmentRequested`.
   propertiesDock_->bindNothing();
 }
 
@@ -1168,40 +1185,33 @@ void MainWindow::onLayerAddCurves() {
   layersPanel_->refresh();
   canvas_->requestRecomposite();
 
-  CurvesDialog dlg(raw, hist, this);
-  connect(&dlg, &CurvesDialog::previewChanged, this,
-          [this]() { canvas_->requestRecomposite(); });
+  // Same flow as onLayerAddLevels (M4-S2): insert identity, push the
+  // LayerOpCommand immediately, bind the dock. Ctrl+Z removes the layer.
+  const std::size_t idx = doc_->tree().size() - 1;
+  auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
+      doc_->tree().removeAt(idx));
 
-  if (dlg.exec() == QDialog::Accepted) {
-    const std::size_t idx = doc_->tree().size() - 1;
-    auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
-        doc_->tree().removeAt(idx));
-    const int priorActive = prevActive;
-
-    auto doIt = [this, stash, idx]() mutable {
-      if (!*stash) return;
-      doc_->tree().insertAt(idx, std::move(*stash));
-      doc_->setActiveLayerIndex(static_cast<int>(idx));
-      doc_->setPaintTarget(PaintTarget::Mask);
-      refreshAfterUndoRedo();
-    };
-    auto undoIt = [this, stash, idx, priorActive, prevPaintTarget]() mutable {
-      *stash = doc_->tree().removeAt(idx);
-      doc_->setActiveLayerIndex(priorActive);
-      doc_->setPaintTarget(prevPaintTarget);
-      refreshAfterUndoRedo();
-    };
-
-    doIt();
-    undoStack_->push(std::make_unique<LayerOpCommand>(
-        "Add Curves Adjustment", std::move(doIt), std::move(undoIt)));
-  } else {
-    doc_->tree().removeAt(doc_->tree().size() - 1);
+  auto doIt = [this, stash, idx]() mutable {
+    if (!*stash) return;
+    doc_->tree().insertAt(idx, std::move(*stash));
+    doc_->setActiveLayerIndex(static_cast<int>(idx));
+    doc_->setPaintTarget(PaintTarget::Mask);
+    refreshAfterUndoRedo();
+    bindActiveAdjustmentToDock();
+  };
+  auto undoIt = [this, stash, idx, prevActive, prevPaintTarget]() mutable {
+    *stash = doc_->tree().removeAt(idx);
     doc_->setActiveLayerIndex(prevActive);
     doc_->setPaintTarget(prevPaintTarget);
-    layersPanel_->refresh();
-    canvas_->requestRecomposite();
-  }
+    refreshAfterUndoRedo();
+    bindActiveAdjustmentToDock();
+  };
+
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>(
+      "Add Curves Adjustment", std::move(doIt), std::move(undoIt)));
+  propertiesDock_->bindCurves(raw, hist);
+  propertiesDock_->raise();
 }
 
 void MainWindow::onLayerAddBrightnessContrast() {
@@ -1333,21 +1343,8 @@ void MainWindow::onEditAdjustmentRequested(LayerBase* layer) {
   }
 
   if (auto* curves = dynamic_cast<CurvesAdjustment*>(layer)) {
-    using PtArr = CurvesAdjustment::PointsArray;
-    CurvesDialog dlg(curves, hist, this);
-    const PtArr before = dlg.pointsBefore();
-    connect(&dlg, &CurvesDialog::previewChanged, this,
-            [this]() { canvas_->requestRecomposite(); });
-    if (dlg.exec() == QDialog::Accepted) {
-      const PtArr after = curves->allPoints();
-      auto setter = [](CurvesAdjustment* l, const PtArr& p) {
-        l->setAllPoints(p);
-      };
-      undoStack_->push(
-          std::make_unique<LayerParamsCommand<CurvesAdjustment, PtArr>>(
-              curves, before, after, setter, "Edit Curves"));
-      canvas_->requestRecomposite();
-    }
+    propertiesDock_->bindCurves(curves, hist);
+    propertiesDock_->raise();
     return;
   }
 

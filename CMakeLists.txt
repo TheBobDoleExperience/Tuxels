@@ -73,12 +73,14 @@ add_executable(tuxels
   src/ui/CollapsibleSection.cpp
   src/ui/BrightnessContrastDialog.h
   src/ui/BrightnessContrastDialog.cpp
-  src/ui/CurvesDialog.h
-  src/ui/CurvesDialog.cpp
+  src/ui/CurveEditor.h
+  src/ui/CurveEditor.cpp
   src/ui/HueSatDialog.h
   src/ui/HueSatDialog.cpp
   src/ui/PropertiesDock.h
   src/ui/PropertiesDock.cpp
+  src/ui/PropertiesPaneCurves.h
+  src/ui/PropertiesPaneCurves.cpp
   src/ui/PropertiesPaneLevels.h
   src/ui/PropertiesPaneLevels.cpp
   src/ui/ToolsPanel.h
@@ -168,4 +170,10 @@ tuxels_add_qt_test(test_tools_panel
 tuxels_add_qt_test(test_properties_pane_levels
   src/ui/PropertiesPaneLevels.h
   src/ui/PropertiesPaneLevels.cpp
+)
+tuxels_add_qt_test(test_properties_pane_curves
+  src/ui/CurveEditor.h
+  src/ui/CurveEditor.cpp
+  src/ui/PropertiesPaneCurves.h
+  src/ui/PropertiesPaneCurves.cpp
 )
