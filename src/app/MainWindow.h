@@ -106,6 +106,18 @@ class MainWindow : public QMainWindow {
   // (Ctrl+G / Ctrl+Shift+G) inherit the QAction's enabled state.
   void updateGroupActionStates();
 
+  // M5-S5: where a new adjustment layer should land based on the current
+  // active layer. When active is a Group, the slot is inside the group at
+  // the top of its children (so the adjustment affects the group's
+  // existing contents). When active is a regular layer, the slot is in
+  // active's parent at active+1 (above active in the same scope). When
+  // there's no active, the slot is root top.
+  struct AdjustmentInsertSlot {
+    LayerId parentId = 0;  // 0 = root
+    std::size_t index = 0;
+  };
+  AdjustmentInsertSlot computeAdjustmentInsertSlot(LayerId activeId) const;
+
   std::unique_ptr<Document> doc_;
   std::unique_ptr<BrushTool> brushTool_;
   std::unique_ptr<MarqueeTool> marqueeTool_;

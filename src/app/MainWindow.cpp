@@ -10,6 +10,7 @@
 #include <QMessageBox>
 #include <QStatusBar>
 #include <algorithm>
+#include <set>
 
 #include "compositor/compose.h"
 #include "core/Document.h"
@@ -897,6 +898,34 @@ void MainWindow::updateGroupActionStates() {
                                    active->kind() == LayerKind::Group);
 }
 
+MainWindow::AdjustmentInsertSlot MainWindow::computeAdjustmentInsertSlot(
+    LayerId activeId) const {
+  AdjustmentInsertSlot slot;
+  if (!doc_) return slot;
+  LayerBase* active = activeId ? doc_->tree().findById(activeId) : nullptr;
+  if (!active) {
+    slot.index = doc_->tree().size();
+    return slot;
+  }
+  if (active->kind() == LayerKind::Group) {
+    // Inside the group at the top of its children — adjustments affect
+    // the group's existing contents.
+    auto* g = static_cast<GroupLayer*>(active);
+    slot.parentId = g->id;
+    slot.index = g->children.size();
+    return slot;
+  }
+  // Regular layer: same parent, above active.
+  auto loc = doc_->tree().locate(activeId);
+  if (!loc) {
+    slot.index = doc_->tree().size();
+    return slot;
+  }
+  slot.parentId = loc->parent ? loc->parent->id : 0;
+  slot.index = loc->index + 1;
+  return slot;
+}
+
 void MainWindow::onLayerAdd() {
   if (!doc_) return;
   const int n = static_cast<int>(doc_->tree().size()) + 1;
@@ -940,27 +969,54 @@ void MainWindow::onLayerAdd() {
 
 void MainWindow::onLayerDelete() {
   if (!doc_) return;
-  const int i = doc_->activeLayerIndex();
-  if (i < 0 || static_cast<std::size_t>(i) >= doc_->tree().size()) return;
-  const std::size_t idx = static_cast<std::size_t>(i);
-  const LayerId prevActiveId = doc_->activeLayerId();
+  const LayerId activeId = doc_->activeLayerId();
+  if (activeId == 0) return;
+  auto loc = doc_->tree().locate(activeId);
+  if (!loc) return;
+
+  // Capture by parent id so closures survive intervening reorders /
+  // group changes. The unique_ptr ownership chain transitively destroys
+  // any children when a group is the deleted layer; undo simply
+  // reinstalls the stashed unique_ptr (group + children intact).
+  const LayerId parentId = loc->parent ? loc->parent->id : 0;
+  const std::size_t idx = loc->index;
   auto stash = std::make_shared<std::unique_ptr<LayerBase>>();
 
-  auto doIt = [this, stash, idx]() mutable {
-    *stash = doc_->tree().removeAt(idx);
-    // Pick the layer that now occupies `idx`, or the new top, or none.
-    if (doc_->tree().empty()) {
-      doc_->setActiveLayerId(0);
+  auto resolveParent = [this](LayerId pid) -> GroupLayer* {
+    if (pid == 0) return nullptr;
+    return dynamic_cast<GroupLayer*>(doc_->tree().findById(pid));
+  };
+
+  auto doIt = [this, stash, parentId, idx, resolveParent]() mutable {
+    GroupLayer* parent = resolveParent(parentId);
+    *stash = doc_->tree().removeFromPath(parent, idx);
+    if (!*stash) return;
+    // Pick the layer that now occupies the deleted slot in the parent,
+    // or fall back to the parent's last layer / the parent itself / none.
+    LayerId newActive = 0;
+    if (parent) {
+      if (idx < parent->children.size()) {
+        newActive = parent->children[idx]->id;
+      } else if (!parent->children.empty()) {
+        newActive = parent->children.back()->id;
+      } else {
+        newActive = parent->id;
+      }
     } else {
-      const std::size_t newIdx = std::min(idx, doc_->tree().size() - 1);
-      doc_->setActiveLayerId(doc_->tree().at(newIdx)->id);
+      if (idx < doc_->tree().size()) {
+        newActive = doc_->tree().at(idx)->id;
+      } else if (!doc_->tree().empty()) {
+        newActive = doc_->tree().at(doc_->tree().size() - 1)->id;
+      }
     }
+    doc_->setActiveLayerId(newActive);
     refreshAfterUndoRedo();
   };
-  auto undoIt = [this, stash, idx, prevActiveId]() mutable {
+  auto undoIt = [this, stash, parentId, idx, activeId, resolveParent]() mutable {
     if (!*stash) return;
-    doc_->tree().insertAt(idx, std::move(*stash));
-    doc_->setActiveLayerId(prevActiveId);
+    doc_->tree().insertAtPath(resolveParent(parentId), idx,
+                               std::move(*stash));
+    doc_->setActiveLayerId(activeId);
     refreshAfterUndoRedo();
   };
 
@@ -1413,9 +1469,24 @@ void MainWindow::onLayerDeleteMaskRequest(LayerBase* layer) {
 
 Histogram4x256 MainWindow::histogramBelow(LayerBase* layer) {
   if (!doc_ || !layer) return Histogram4x256{};
+  // Build the set of `layer`'s ancestor groups so we don't accidentally
+  // hide them — flatten() emits groups *after* their children (child-then-
+  // self), so a target inside a group has its parent group at a later
+  // flatten index. Hiding the parent group would skip the recursion into
+  // the group's earlier children too, which would wrongly remove them
+  // from the preview composite even though they're below the target in
+  // composite order.
+  std::set<const LayerBase*> ancestors;
+  for (LayerId cur = layer->id; cur != 0;) {
+    auto loc = doc_->tree().locate(cur);
+    if (!loc || !loc->parent) break;
+    ancestors.insert(loc->parent);
+    cur = loc->parent->id;
+  }
+
   // Walk the flattened tree (matches compose's iteration order) and hide
-  // every layer at-or-after the target so the preview composite reflects
-  // "what's about to be adjusted" by this layer.
+  // every layer at-or-after the target — except for ancestor groups,
+  // which must stay visible so their earlier children compose normally.
   std::vector<LayerBase*> flat = doc_->tree().flatten();
   std::vector<bool> saved;
   saved.reserve(flat.size());
@@ -1423,7 +1494,7 @@ Histogram4x256 MainWindow::histogramBelow(LayerBase* layer) {
   for (LayerBase* l : flat) {
     saved.push_back(l->visible);
     if (l == layer) pastLayer = true;
-    if (pastLayer) l->visible = false;
+    if (pastLayer && ancestors.count(l) == 0) l->visible = false;
   }
   TuxImage preview(doc_->width(), doc_->height());
   compose(doc_->tree(), preview);
@@ -1437,6 +1508,13 @@ void MainWindow::bindActiveAdjustmentToDock() {
   if (!propertiesDock_ || !doc_) return;
   LayerBase* layer = doc_->activeLayer();
   if (!layer) {
+    propertiesDock_->bindNothing();
+    return;
+  }
+  // Groups have no Properties pane in M5 — punted to M6 (group color
+  // labels, isolation flag, etc.). Make the arm explicit so future
+  // group-properties work has an obvious home.
+  if (layer->kind() == LayerKind::Group) {
     propertiesDock_->bindNothing();
     return;
   }
@@ -1480,23 +1558,34 @@ void MainWindow::onLayerAddLevels() {
   // user changes their mind.
   LevelsAdjustment* raw = doc_->addAdjustmentLayer(std::move(layer));
   const LayerId addedId = raw->id;
-  layersPanel_->refresh();
-  canvas_->requestRecomposite();
-
-  const std::size_t idx = doc_->tree().size() - 1;
+  // M5-S5: compute the target slot from the prev active layer (active was
+  // bumped to the new adjustment by addAdjustmentLayer). This routes the
+  // adjustment into the active group / above the active layer rather than
+  // always landing at root top.
+  const auto slot = computeAdjustmentInsertSlot(prevActiveId);
+  // Pull the just-added layer out of root so the closure can reinstall it
+  // at the target slot.
   auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
-      doc_->tree().removeAt(idx));
+      doc_->tree().removeAt(doc_->tree().size() - 1));
 
-  auto doIt = [this, stash, idx, addedId]() mutable {
+  auto resolveParent = [this](LayerId pid) -> GroupLayer* {
+    if (pid == 0) return nullptr;
+    return dynamic_cast<GroupLayer*>(doc_->tree().findById(pid));
+  };
+
+  auto doIt = [this, stash, slot, addedId, resolveParent]() mutable {
     if (!*stash) return;
-    doc_->tree().insertAt(idx, std::move(*stash));
+    doc_->tree().insertAtPath(resolveParent(slot.parentId), slot.index,
+                               std::move(*stash));
     doc_->setActiveLayerId(addedId);
     doc_->setPaintTarget(PaintTarget::Mask);
     refreshAfterUndoRedo();
     bindActiveAdjustmentToDock();
   };
-  auto undoIt = [this, stash, idx, prevActiveId, prevPaintTarget]() mutable {
-    *stash = doc_->tree().removeAt(idx);
+  auto undoIt = [this, stash, slot, prevActiveId, prevPaintTarget,
+                 resolveParent]() mutable {
+    *stash = doc_->tree().removeFromPath(resolveParent(slot.parentId),
+                                          slot.index);
     doc_->setActiveLayerId(prevActiveId);
     doc_->setPaintTarget(prevPaintTarget);
     refreshAfterUndoRedo();
@@ -1525,25 +1614,28 @@ void MainWindow::onLayerAddCurves() {
 
   CurvesAdjustment* raw = doc_->addAdjustmentLayer(std::move(layer));
   const LayerId addedId = raw->id;
-  layersPanel_->refresh();
-  canvas_->requestRecomposite();
-
-  // Same flow as onLayerAddLevels (M4-S2): insert identity, push the
-  // LayerOpCommand immediately, bind the dock. Ctrl+Z removes the layer.
-  const std::size_t idx = doc_->tree().size() - 1;
+  const auto slot = computeAdjustmentInsertSlot(prevActiveId);
   auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
-      doc_->tree().removeAt(idx));
+      doc_->tree().removeAt(doc_->tree().size() - 1));
 
-  auto doIt = [this, stash, idx, addedId]() mutable {
+  auto resolveParent = [this](LayerId pid) -> GroupLayer* {
+    if (pid == 0) return nullptr;
+    return dynamic_cast<GroupLayer*>(doc_->tree().findById(pid));
+  };
+
+  auto doIt = [this, stash, slot, addedId, resolveParent]() mutable {
     if (!*stash) return;
-    doc_->tree().insertAt(idx, std::move(*stash));
+    doc_->tree().insertAtPath(resolveParent(slot.parentId), slot.index,
+                               std::move(*stash));
     doc_->setActiveLayerId(addedId);
     doc_->setPaintTarget(PaintTarget::Mask);
     refreshAfterUndoRedo();
     bindActiveAdjustmentToDock();
   };
-  auto undoIt = [this, stash, idx, prevActiveId, prevPaintTarget]() mutable {
-    *stash = doc_->tree().removeAt(idx);
+  auto undoIt = [this, stash, slot, prevActiveId, prevPaintTarget,
+                 resolveParent]() mutable {
+    *stash = doc_->tree().removeFromPath(resolveParent(slot.parentId),
+                                          slot.index);
     doc_->setActiveLayerId(prevActiveId);
     doc_->setPaintTarget(prevPaintTarget);
     refreshAfterUndoRedo();
@@ -1567,23 +1659,28 @@ void MainWindow::onLayerAddBrightnessContrast() {
 
   BrightnessContrast* raw = doc_->addAdjustmentLayer(std::move(layer));
   const LayerId addedId = raw->id;
-  layersPanel_->refresh();
-  canvas_->requestRecomposite();
-
-  const std::size_t idx = doc_->tree().size() - 1;
+  const auto slot = computeAdjustmentInsertSlot(prevActiveId);
   auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
-      doc_->tree().removeAt(idx));
+      doc_->tree().removeAt(doc_->tree().size() - 1));
 
-  auto doIt = [this, stash, idx, addedId]() mutable {
+  auto resolveParent = [this](LayerId pid) -> GroupLayer* {
+    if (pid == 0) return nullptr;
+    return dynamic_cast<GroupLayer*>(doc_->tree().findById(pid));
+  };
+
+  auto doIt = [this, stash, slot, addedId, resolveParent]() mutable {
     if (!*stash) return;
-    doc_->tree().insertAt(idx, std::move(*stash));
+    doc_->tree().insertAtPath(resolveParent(slot.parentId), slot.index,
+                               std::move(*stash));
     doc_->setActiveLayerId(addedId);
     doc_->setPaintTarget(PaintTarget::Mask);
     refreshAfterUndoRedo();
     bindActiveAdjustmentToDock();
   };
-  auto undoIt = [this, stash, idx, prevActiveId, prevPaintTarget]() mutable {
-    *stash = doc_->tree().removeAt(idx);
+  auto undoIt = [this, stash, slot, prevActiveId, prevPaintTarget,
+                 resolveParent]() mutable {
+    *stash = doc_->tree().removeFromPath(resolveParent(slot.parentId),
+                                          slot.index);
     doc_->setActiveLayerId(prevActiveId);
     doc_->setPaintTarget(prevPaintTarget);
     refreshAfterUndoRedo();
@@ -1608,23 +1705,28 @@ void MainWindow::onLayerAddHueSaturation() {
 
   HueSaturation* raw = doc_->addAdjustmentLayer(std::move(layer));
   const LayerId addedId = raw->id;
-  layersPanel_->refresh();
-  canvas_->requestRecomposite();
-
-  const std::size_t idx = doc_->tree().size() - 1;
+  const auto slot = computeAdjustmentInsertSlot(prevActiveId);
   auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
-      doc_->tree().removeAt(idx));
+      doc_->tree().removeAt(doc_->tree().size() - 1));
 
-  auto doIt = [this, stash, idx, addedId]() mutable {
+  auto resolveParent = [this](LayerId pid) -> GroupLayer* {
+    if (pid == 0) return nullptr;
+    return dynamic_cast<GroupLayer*>(doc_->tree().findById(pid));
+  };
+
+  auto doIt = [this, stash, slot, addedId, resolveParent]() mutable {
     if (!*stash) return;
-    doc_->tree().insertAt(idx, std::move(*stash));
+    doc_->tree().insertAtPath(resolveParent(slot.parentId), slot.index,
+                               std::move(*stash));
     doc_->setActiveLayerId(addedId);
     doc_->setPaintTarget(PaintTarget::Mask);
     refreshAfterUndoRedo();
     bindActiveAdjustmentToDock();
   };
-  auto undoIt = [this, stash, idx, prevActiveId, prevPaintTarget]() mutable {
-    *stash = doc_->tree().removeAt(idx);
+  auto undoIt = [this, stash, slot, prevActiveId, prevPaintTarget,
+                 resolveParent]() mutable {
+    *stash = doc_->tree().removeFromPath(resolveParent(slot.parentId),
+                                          slot.index);
     doc_->setActiveLayerId(prevActiveId);
     doc_->setPaintTarget(prevPaintTarget);
     refreshAfterUndoRedo();

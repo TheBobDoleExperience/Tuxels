@@ -6,7 +6,7 @@
 
 **M5 active — Layer Groups.** Plan locked at
 `/home/james/.claude/plans/let-s-make-a-plan-resilient-engelbart.md`.
-S0–S4 shipped:
+S0–S5 shipped:
 
 - **S0** (commit `57b07d4`, 317 / 34): tree refactor + active-id
   migration + CropCommand id-keyed snapshot.
@@ -17,42 +17,42 @@ S0–S4 shipped:
 - **S3** (commit `3929f2c`, 353 / 36): chevron + folder thumb +
   indent + Pass-Through combo + depth-aware panel walk + `Layer →
   New Group` menu.
-- **S4** (362 / 37): Group / Ungroup wired (Ctrl+G,
-  Ctrl+Shift+G); New Group inserts at active+1; Up/Down scope-
-  local with status-bar feedback at top/bottom of group; menu
-  actions enable/disable per active state. 9 new
-  test_group_commands cases.
+- **S4** (commit `d20a801`, 362 / 37): Group / Ungroup commands
+  (Ctrl+G, Ctrl+Shift+G); New Group inserts at active+1; Up/Down
+  scope-local; menu enable/disable per active state.
+- **S5** (364 / 37): `onLayerDelete` group-aware (uses
+  `removeFromPath`); PropertiesDock empty-state on group;
+  `addAdjustment*` slots route into active group / above active
+  via `computeAdjustmentInsertSlot`; **bug-fix in
+  `histogramBelow`** — keeps target's ancestor groups visible so
+  the preview composite includes the group's earlier children. 2
+  new test cases.
 
-**Start here: S5 — polish.** Mostly cleanup and dock-empty-state
-plumbing for groups. Files:
-- `src/app/MainWindow.cpp` — `onLayerDelete` currently uses
-  `activeLayerIndex()` shim + `tree.removeAt(idx)` which only
-  works at root. Update the slot to use `tree.locate(activeId)` +
-  `removeFromPath` so deleting a layer inside a group works
-  cleanly. When the active layer IS a group, the unique_ptr
-  ownership chain transitively destroys the children — undo
-  restores the whole subtree by pulling the stashed group back in.
-- `src/ui/PropertiesDock.cpp` — `bindActiveAdjustmentToDock`
-  already falls through to `bindNothing()` when the active is a
-  group (no `dynamic_cast` matches), but make the Group arm
-  explicit for clarity + as a hook for the future group-properties
-  pane.
-- `MainWindow::onLayerAdd*` (the four addAdjustment slots) —
-  current `Document::addAdjustmentLayer<T>` always appends at
-  root. When active is inside a group, route the new adjustment
-  into that group at (active's index + 1); when active IS a
-  group, route into the group itself at the top of its children.
-  Mirrors PS's context-aware Add Adjustment.
-- `MainWindow::histogramBelow` already walks `tree.flatten()`
-  (S0 prep) — verify with a regression test for layers inside
-  groups.
-- New cases: `delete_active_group_with_children_round_trip`,
-  `clip_to_below_on_group_gates_compositing` (extension of
-  `test_compose_groups`), `histogram_below_layer_inside_group`.
-
-After S5: S6 — DoD walkthrough on a real multi-layer doc + tag
-`v0.5.0-m5`. Update docs/STATUS.md (M5 ✅), docs/NEXT.md (M6
-candidates), docs/LOG.md, docs/ARCHITECTURE.md.
+**Start here: S6 — verify + tag `v0.5.0-m5`.** All M5 substantive
+work is done. The remaining tasks are:
+1. Manual DoD walkthrough on a real multi-layer doc — open a v4
+   `.txl` from M4 (loads flat); Ctrl+G to wrap a layer in a
+   group; switch group blend to Multiply (isolation); add a
+   Levels adjustment (lands inside the group); add a doc-sized
+   group mask, paint half-coverage; Ctrl+Shift+G to ungroup;
+   save → reopen (v5 round-trip with nesting + masks +
+   `isExpanded`); undo-redo loop; Free Transform on inner layer;
+   Crop the doc.
+2. `cmake --build build && ctest --test-dir build` — expect 364
+   passing across 37 executables.
+3. Tag `v0.5.0-m5` and update:
+   - `docs/STATUS.md` — flip M5 row to "shipped 2026-04-26 as
+     `v0.5.0-m5`" with final test count.
+   - `docs/NEXT.md` — point at M6 with: multi-select in
+     LayersPanel, drag-and-drop reorder + drop-into-group, group
+     properties pane in PropertiesDock, Up/Down crossing group
+     boundaries, PSD round-trip (the section-divider scheme
+     matches PSD; actual reader/writer is its own milestone),
+     Smart Objects (held over from M3 deferred list), brush
+     dynamics tablet pressure (deferred since M2).
+   - `docs/LOG.md` — add the M5 chronicle.
+   - `docs/ARCHITECTURE.md` — recursive LayerTree, Pass-Through
+     vs. isolated compose semantics, `.txl` v5 section dividers.
 
 Cold-start verification:
 
@@ -61,12 +61,12 @@ cmake --build build && ctest --test-dir build
 QT_QPA_PLATFORM=offscreen timeout 2 ./build/tuxels
 ```
 
-Expect 362 passing across 37 executables at S4 (M5 in progress).
+Expect 364 passing across 37 executables at S5 (M5 in progress).
 
 ## Cold-Start Checklist
 
-1. `cat docs/STATUS.md` — current state (M5 active, S0–S4 ✅).
-2. This file — S5 entry point + remaining steps.
+1. `cat docs/STATUS.md` — current state (M5 active, S0–S5 ✅).
+2. This file — S6 (verify + tag) is all that's left.
 3. `cat /home/james/.claude/plans/let-s-make-a-plan-resilient-engelbart.md`
    — full M5 plan with per-step DoD + tests + critical files.
 4. `cat docs/ARCHITECTURE.md` — don't re-derive decisions.
@@ -76,4 +76,4 @@ Expect 362 passing across 37 executables at S4 (M5 in progress).
    shipped tags (`v0.0.1-m0`, `v0.1.0-m1`, `v0.2.0-m2`, `v0.3.0-m3`,
    `v0.4.0-m4`).
 7. `cmake --build build && ctest --test-dir build` — confirm green
-   tree (362 passing at S4 mid-M5).
+   tree (364 passing at S5 mid-M5).

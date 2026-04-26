@@ -1,6 +1,10 @@
 #include <memory>
+#include <set>
 
+#include "compositor/compose.h"
 #include "core/Document.h"
+#include "core/Histogram.h"
+#include "core/TuxImage.h"
 #include "layers/GroupLayer.h"
 #include "layers/PixelLayer.h"
 #include "test_harness.h"
@@ -387,6 +391,138 @@ TEST(new_group_inside_existing_group_inserts_as_sibling) {
   CHECK_EQ(gPtr->children[0]->id, xId);
   CHECK_EQ(gPtr->children[1]->id, newGId);
   CHECK_EQ(gPtr->children[2]->id, yId);
+}
+
+// Replicates `MainWindow::histogramBelow` for testing. Hides `target`
+// and every layer that follows it in `tree.flatten()` *except* ancestor
+// groups (which would otherwise skip-recurse over the group's earlier
+// children that we want kept visible). Composes, computes a histogram
+// of the result, and restores visibility before returning.
+Histogram4x256 histogramBelow(Document& doc, LayerBase* target) {
+  std::set<const LayerBase*> ancestors;
+  for (LayerId cur = target ? target->id : 0; cur != 0;) {
+    auto loc = doc.tree().locate(cur);
+    if (!loc || !loc->parent) break;
+    ancestors.insert(loc->parent);
+    cur = loc->parent->id;
+  }
+  std::vector<LayerBase*> flat = doc.tree().flatten();
+  std::vector<bool> saved;
+  saved.reserve(flat.size());
+  bool past = false;
+  for (LayerBase* l : flat) {
+    saved.push_back(l->visible);
+    if (l == target) past = true;
+    if (past && ancestors.count(l) == 0) l->visible = false;
+  }
+  TuxImage preview(doc.width(), doc.height());
+  compose(doc.tree(), preview);
+  for (std::size_t i = 0; i < flat.size(); ++i) flat[i]->visible = saved[i];
+  return computeHistogram(preview, doc.selection());
+}
+
+TEST(delete_active_group_with_children_round_trip) {
+  // Build [A, group{[B, C]}, D]. Delete the group via the same pattern as
+  // `MainWindow::onLayerDelete` (locate + removeFromPath). Tree becomes
+  // [A, D]; the group + its children are owned by the stash. Undo
+  // (insertAtPath) restores everything.
+  Document doc(8, 8);
+  PixelLayer* a = doc.addBlankPixelLayer("A");
+  auto group = std::make_unique<GroupLayer>();
+  group->id = doc.nextLayerId();
+  const LayerId groupId = group->id;
+  auto b = std::make_unique<PixelLayer>(8, 8);
+  b->id = doc.nextLayerId();
+  const LayerId bId = b->id;
+  auto c = std::make_unique<PixelLayer>(8, 8);
+  c->id = doc.nextLayerId();
+  const LayerId cId = c->id;
+  group->children.push_back(std::move(b));
+  group->children.push_back(std::move(c));
+  doc.tree().add(std::move(group));
+  PixelLayer* d = doc.addBlankPixelLayer("D");
+  doc.setActiveLayerId(groupId);
+
+  // Delete: capture parent + idx, removeFromPath, set active to next.
+  auto loc = doc.tree().locate(groupId);
+  CHECK(loc.has_value());
+  const LayerId parentId = loc->parent ? loc->parent->id : 0;
+  const std::size_t idx = loc->index;
+  CHECK_EQ(parentId, LayerId{0});  // group is at root
+  auto stash = doc.tree().removeFromPath(resolveParent(doc, parentId), idx);
+  CHECK(stash != nullptr);
+  // Set active to layer now at parent[idx] = D (which slid into idx 1).
+  doc.setActiveLayerId(d->id);
+
+  // Tree shape after delete.
+  CHECK_EQ(doc.tree().size(), std::size_t{2});
+  CHECK_EQ(doc.tree().at(0)->id, a->id);
+  CHECK_EQ(doc.tree().at(1)->id, d->id);
+  // Group with both children is still alive in the stash.
+  auto* gPtr = static_cast<GroupLayer*>(stash.get());
+  CHECK_EQ(gPtr->id, groupId);
+  CHECK_EQ(gPtr->children.size(), std::size_t{2});
+  CHECK_EQ(gPtr->children[0]->id, bId);
+  CHECK_EQ(gPtr->children[1]->id, cId);
+
+  // Undo: re-install the stashed group at original parent + idx.
+  doc.tree().insertAtPath(resolveParent(doc, parentId), idx, std::move(stash));
+  doc.setActiveLayerId(groupId);
+  // Tree restored.
+  CHECK_EQ(doc.tree().size(), std::size_t{3});
+  CHECK_EQ(doc.tree().at(0)->id, a->id);
+  auto* g2 = dynamic_cast<GroupLayer*>(doc.tree().at(1));
+  CHECK(g2 != nullptr);
+  CHECK_EQ(g2->id, groupId);
+  CHECK_EQ(g2->children.size(), std::size_t{2});
+  CHECK_EQ(g2->children[0]->id, bId);
+  CHECK_EQ(g2->children[1]->id, cId);
+  CHECK_EQ(doc.tree().at(2)->id, d->id);
+}
+
+TEST(histogram_below_target_inside_passthrough_group) {
+  // Build [bg=red, group{PassThrough, [child=green, target_pixel]}].
+  // histogramBelow(target_pixel) should hide target + group + everything
+  // after target in flatten order. Pass-Through group means children
+  // share parent scope, so the "below" composite = [bg, child] = green
+  // over red = green wherever child is opaque.
+  // For this test, child fills the whole 4x4 doc with green — so the
+  // "below" composite is solid green (4x4 = 16 pixels).
+  Document doc(4, 4);
+  auto bg = std::make_unique<PixelLayer>(4, 4);
+  bg->id = doc.nextLayerId();
+  bg->image.fill(Rgba32F{1.f, 0.f, 0.f, 1.f});
+  doc.tree().add(std::move(bg));
+
+  auto g = std::make_unique<GroupLayer>();
+  g->id = doc.nextLayerId();
+  g->blend = BlendMode::PassThrough;
+
+  auto child = std::make_unique<PixelLayer>(4, 4);
+  child->id = doc.nextLayerId();
+  child->image.fill(Rgba32F{0.f, 1.f, 0.f, 1.f});
+  g->children.push_back(std::move(child));
+
+  auto target = std::make_unique<PixelLayer>(4, 4);
+  target->id = doc.nextLayerId();
+  const LayerId targetId = target->id;
+  target->image.fill(Rgba32F{0.f, 0.f, 1.f, 1.f});  // blue, would normally show
+  g->children.push_back(std::move(target));
+
+  doc.tree().add(std::move(g));
+
+  LayerBase* targetPtr = doc.tree().findById(targetId);
+  CHECK(targetPtr != nullptr);
+  Histogram4x256 hist = histogramBelow(doc, targetPtr);
+
+  // Composite of [bg, child] = solid green: R=0, G=1, B=0 at 16 pixels.
+  // Buckets: R[0]=16, G[255]=16, B[0]=16, luma~bucket 149 (0.587*1*255).
+  CHECK_EQ(hist.total, uint64_t{16});
+  CHECK_EQ(hist.buckets[0][0], 16u);
+  CHECK_EQ(hist.buckets[1][255], 16u);
+  CHECK_EQ(hist.buckets[2][0], 16u);
+  // Luma channel — solid green should bucket at lround(0.587 * 255) = 150.
+  CHECK_EQ(hist.buckets[3][150], 16u);
 }
 
 int main() { return ::tuxels::testing::run(); }
