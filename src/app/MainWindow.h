@@ -44,6 +44,7 @@ class MainWindow : public QMainWindow {
   void onEditUndo();
   void onEditRedo();
   void onLayerAdd();
+  void onLayerNewGroup();
   void onLayerAddLevels();
   void onLayerAddCurves();
   void onLayerAddBrightnessContrast();

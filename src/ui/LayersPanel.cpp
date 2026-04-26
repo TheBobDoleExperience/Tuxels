@@ -10,6 +10,7 @@
 #include <QWidget>
 
 #include "core/Document.h"
+#include "layers/GroupLayer.h"
 #include "layers/LayerBase.h"
 #include "ui/LayerRowWidget.h"
 
@@ -60,6 +61,39 @@ void LayersPanel::setDocument(Document* doc) {
   refresh();
 }
 
+namespace {
+
+// Build a top-down display-order list of layers, honoring per-group
+// expansion. Children of an expanded group come immediately after the
+// group's own row (visually nested below); collapsed groups skip their
+// children entirely. Each entry carries the depth so the row can indent
+// itself.
+//
+// PS reads top-of-stack first; the model is bottom-to-top. We walk children
+// in *reverse* so the "topmost" child appears just below its group header
+// in the UI, matching PS.
+struct DisplayEntry {
+  LayerBase* layer;
+  int depth;
+};
+
+void buildDisplayList(const std::vector<std::unique_ptr<LayerBase>>& children,
+                      int depth, std::vector<DisplayEntry>& out) {
+  for (auto it = children.rbegin(); it != children.rend(); ++it) {
+    LayerBase* l = it->get();
+    if (!l) continue;
+    out.push_back({l, depth});
+    if (l->kind() == LayerKind::Group) {
+      const auto* g = static_cast<const GroupLayer*>(l);
+      if (g->isExpanded) {
+        buildDisplayList(g->children, depth + 1, out);
+      }
+    }
+  }
+}
+
+}  // namespace
+
 void LayersPanel::refresh() {
   refreshing_ = true;
   list_->clear();
@@ -69,13 +103,15 @@ void LayersPanel::refresh() {
     return;
   }
 
-  // Display top-of-stack first so the UI reads top-down as in Photoshop.
-  const int n = static_cast<int>(doc_->tree().size());
-  for (int uiIdx = 0; uiIdx < n; ++uiIdx) {
-    const int modelIdx = n - 1 - uiIdx;
-    LayerBase* layer = doc_->tree().at(static_cast<std::size_t>(modelIdx));
+  // Walk the tree top-down (PS UI reading order); collect the layers that
+  // are visible in the panel given current group-expansion state.
+  std::vector<DisplayEntry> entries;
+  buildDisplayList(doc_->tree().raw(), /*depth=*/0, entries);
+
+  for (const auto& e : entries) {
     auto* row = new LayerRowWidget();
-    row->bindToLayer(layer);
+    row->bindToLayer(e.layer);
+    row->setIndentDepth(e.depth);
     connect(row, &LayerRowWidget::layerMutated, this,
             &LayersPanel::onLayerRowMutated);
     connect(row, &LayerRowWidget::visibilityChangeRequested, this,
@@ -94,10 +130,11 @@ void LayersPanel::refresh() {
             &LayersPanel::editAdjustmentRequested);
     connect(row, &LayerRowWidget::toggleClipToBelowRequested, this,
             &LayersPanel::toggleClipToBelowRequested);
+    connect(row, &LayerRowWidget::chevronToggled, this,
+            &LayersPanel::onGroupChevronToggled);
 
     auto* item = new QListWidgetItem();
     item->setSizeHint(row->sizeHint());
-    item->setData(Qt::UserRole, modelIdx);
     list_->addItem(item);
     list_->setItemWidget(item, row);
     rows_.push_back(row);
@@ -122,6 +159,12 @@ void LayersPanel::refresh() {
   refreshing_ = false;
 }
 
+void LayersPanel::onGroupChevronToggled(GroupLayer* group) {
+  if (!group) return;
+  group->isExpanded = !group->isExpanded;
+  refresh();
+}
+
 void LayersPanel::onCurrentRowChanged(int row) {
   if (refreshing_ || !doc_) return;
   if (row < 0 || row >= static_cast<int>(rows_.size())) {
@@ -139,6 +182,15 @@ void LayersPanel::onCurrentRowChanged(int row) {
 
 void LayersPanel::onLayerRowMutated(LayerBase* /*layer*/) {
   emit layerMutated();
+}
+
+int LayersPanel::rowCountForTesting() const {
+  return static_cast<int>(rows_.size());
+}
+
+LayerRowWidget* LayersPanel::rowAtForTesting(int index) const {
+  if (index < 0 || index >= static_cast<int>(rows_.size())) return nullptr;
+  return rows_[static_cast<std::size_t>(index)];
 }
 
 }  // namespace tuxels

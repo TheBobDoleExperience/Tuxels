@@ -14,8 +14,13 @@ class QSlider;
 namespace tuxels {
 
 class LayerBase;
+class GroupLayer;
 
-// One visual row for a layer: [vis][thumb][mask?][name][blend mode][opacity].
+// One visual row for a layer: [vis][chevron?][clip?][thumb][mask?][name]
+// [blend mode][opacity]. Groups (M5) get a chevron + folder-glyph thumb +
+// "Pass Through" entry in the blend combo; non-groups omit those.
+// `setIndentDepth(int)` controls left padding so nested children indent
+// under their parent group (caller passes depth; widget computes margin).
 class LayerRowWidget : public QWidget {
   Q_OBJECT
 
@@ -30,6 +35,18 @@ class LayerRowWidget : public QWidget {
   void setActive(bool active);
   // Which of (layer thumb, mask thumb) should be highlighted when active.
   void setPaintTarget(PaintTarget t);
+  // Indent in tree levels (0 = root). Updates the layout's left margin so
+  // children of expanded groups visually nest under their parent.
+  void setIndentDepth(int depth);
+  int indentDepth() const { return indentDepth_; }
+
+  // Test-only accessors.
+  int blendItemCountForTesting() const;
+  bool blendComboHasPassThroughForTesting() const {
+    return comboHasPassThrough_;
+  }
+  bool isChevronVisibleForTesting() const;
+  void simulateChevronClickForTesting();
 
  signals:
   // Emitted after a user interaction changes the bound layer. The listener
@@ -52,6 +69,9 @@ class LayerRowWidget : public QWidget {
   // row body. Toggles `clipToBelow` on the bound layer (M4-S1 PS-style
   // clip-to-layer). MainWindow wraps in a LayerOpCommand for undo.
   void toggleClipToBelowRequested(LayerBase* layer);
+  // Chevron click on a group row — toggle the group's `isExpanded` flag.
+  // Panel handles the side-effect (mutate flag + refresh).
+  void chevronToggled(GroupLayer* group);
 
  protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
@@ -66,15 +86,20 @@ class LayerRowWidget : public QWidget {
  private:
   void rebuildThumbnail();
   void rebuildMaskThumbnail();
+  void rebuildBlendCombo(bool includePassThrough);
   void updateThumbHighlight();
+  void updateChevronGlyph();
 
   LayerBase* layer_ = nullptr;
   bool blockSignals_ = false;
   bool active_ = false;
   PaintTarget paintTarget_ = PaintTarget::Layer;
   float opacityBeforeDrag_ = 1.f;
+  int indentDepth_ = 0;
+  bool comboHasPassThrough_ = false;
 
   QCheckBox* visCheck_ = nullptr;
+  QLabel* chevron_ = nullptr;
   QLabel* clipGlyph_ = nullptr;
   QLabel* thumb_ = nullptr;
   QLabel* maskThumb_ = nullptr;

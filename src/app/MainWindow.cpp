@@ -27,6 +27,7 @@
 #include "io/TxlIO.h"
 #include "layers/BrightnessContrast.h"
 #include "layers/CurvesAdjustment.h"
+#include "layers/GroupLayer.h"
 #include "layers/HueSaturation.h"
 #include "layers/LayerMask.h"
 #include "layers/LevelsAdjustment.h"
@@ -131,8 +132,23 @@ void MainWindow::buildMenus() {
   addLayerAct->setShortcut(QKeySequence(tr("Ctrl+Shift+N")));
   connect(addLayerAct, &QAction::triggered, this, &MainWindow::onLayerAdd);
 
+  auto* newGroupAct = layerMenu->addAction(tr("New &Group"));
+  connect(newGroupAct, &QAction::triggered, this,
+          &MainWindow::onLayerNewGroup);
+
   auto* delLayerAct = layerMenu->addAction(tr("&Delete Layer"));
   connect(delLayerAct, &QAction::triggered, this, &MainWindow::onLayerDelete);
+
+  layerMenu->addSeparator();
+  // Group / Ungroup placeholders — wired in M5-S4. Disabled until then so
+  // the user discovers the shortcuts but doesn't get a half-implemented
+  // path. The shortcut keys are already reserved (Ctrl+G / Ctrl+Shift+G).
+  auto* groupLayerAct = layerMenu->addAction(tr("&Group Layer"));
+  groupLayerAct->setShortcut(QKeySequence(tr("Ctrl+G")));
+  groupLayerAct->setEnabled(false);
+  auto* ungroupLayerAct = layerMenu->addAction(tr("&Ungroup Layer"));
+  ungroupLayerAct->setShortcut(QKeySequence(tr("Ctrl+Shift+G")));
+  ungroupLayerAct->setEnabled(false);
 
   layerMenu->addSeparator();
   auto* addMaskAct = layerMenu->addAction(tr("Add Layer &Mask"));
@@ -634,6 +650,49 @@ void MainWindow::onFileExport() {
     return;
   }
   statusBar()->showMessage(tr("Exported %1").arg(path), 3000);
+}
+
+void MainWindow::onLayerNewGroup() {
+  if (!doc_) return;
+  // Name the new group "Group N" where N counts existing groups in the
+  // tree (recursively). Matches PS's "Group 1, Group 2..." pattern.
+  int existingGroups = 0;
+  doc_->tree().forEach([&existingGroups](const LayerBase* l) {
+    if (l && l->kind() == LayerKind::Group) ++existingGroups;
+  });
+  const std::string name = "Group " + std::to_string(existingGroups + 1);
+  const LayerId id = doc_->nextLayerId();
+  const LayerId prevActiveId = doc_->activeLayerId();
+
+  auto stash = std::make_shared<std::unique_ptr<LayerBase>>();
+
+  auto doIt = [this, stash, name, id]() mutable {
+    std::unique_ptr<LayerBase> layer;
+    if (*stash) {
+      layer = std::move(*stash);
+    } else {
+      auto g = std::make_unique<GroupLayer>();
+      g->id = id;
+      g->name = name;
+      // Default: PassThrough blend (set by GroupLayer ctor), expanded,
+      // no mask, opacity 1.
+      layer = std::move(g);
+    }
+    doc_->tree().add(std::move(layer));
+    doc_->setActiveLayerId(id);
+    refreshAfterUndoRedo();
+  };
+  auto undoIt = [this, stash, prevActiveId]() mutable {
+    const std::size_t lastIdx = doc_->tree().size() - 1;
+    *stash = doc_->tree().removeAt(lastIdx);
+    doc_->setActiveLayerId(prevActiveId);
+    refreshAfterUndoRedo();
+  };
+
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>("New Group",
+                                                    std::move(doIt),
+                                                    std::move(undoIt)));
 }
 
 void MainWindow::onLayerAdd() {

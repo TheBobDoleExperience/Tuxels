@@ -13,6 +13,7 @@ class QToolBar;
 namespace tuxels {
 
 class Document;
+class GroupLayer;
 class LayerBase;
 class LayerRowWidget;
 
@@ -24,6 +25,11 @@ class LayersPanel : public QDockWidget {
 
   void setDocument(Document* doc);
   void refresh();
+
+  // Test-only accessors. The panel's rebuild walks the tree top-down with
+  // depth indices; tests inspect the resulting row widgets directly.
+  int rowCountForTesting() const;
+  LayerRowWidget* rowAtForTesting(int index) const;
 
  signals:
   void addLayerRequested();
@@ -46,6 +52,9 @@ class LayersPanel : public QDockWidget {
  private slots:
   void onCurrentRowChanged(int row);
   void onLayerRowMutated(LayerBase* layer);
+  // Chevron click on a group row — flip the group's `isExpanded` flag and
+  // re-walk the tree so the panel shows / hides its children.
+  void onGroupChevronToggled(GroupLayer* group);
 
  private:
   Document* doc_ = nullptr;

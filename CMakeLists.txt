@@ -187,3 +187,9 @@ tuxels_add_qt_test(test_properties_pane_smaller
   src/ui/PropertiesPaneBrightnessContrast.h
   src/ui/PropertiesPaneBrightnessContrast.cpp
 )
+tuxels_add_qt_test(test_layers_panel_groups
+  src/ui/LayerRowWidget.h
+  src/ui/LayerRowWidget.cpp
+  src/ui/LayersPanel.h
+  src/ui/LayersPanel.cpp
+)
