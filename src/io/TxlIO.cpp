@@ -29,7 +29,8 @@ namespace tuxels {
 namespace {
 
 constexpr char kMagic[8] = {'T', 'U', 'X', 'E', 'L', 'S', '\x01', '\x00'};
-constexpr uint32_t kVersionCurrent = 3;
+constexpr uint32_t kVersionCurrent = 4;
+constexpr uint32_t kVersionV3 = 3;
 constexpr uint32_t kVersionV2 = 2;
 constexpr uint32_t kVersionV1 = 1;
 
@@ -254,6 +255,9 @@ bool saveTxl(const std::string& path, const Document& doc, std::string* err) {
     writeRaw(out, static_cast<uint8_t>(
                       (layer->mask && layer->mask->enabled) ? 1 : 0));
     writeRaw(out, static_cast<uint8_t>(layer->mask ? 1 : 0));
+    // v4+: ClipToBelow byte. Pre-v4 readers will misalign here, but the
+    // version gate up top blocks them.
+    writeRaw(out, static_cast<uint8_t>(layer->clipToBelow ? 1 : 0));
     writeRaw(out, layer->opacity);
     writeRaw(out, static_cast<uint32_t>(layer->blend));
 
@@ -359,8 +363,8 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
 
   uint32_t version = 0, flags = 0;
   readRaw(in, version);
-  if (version != kVersionCurrent && version != kVersionV2 &&
-      version != kVersionV1) {
+  if (version != kVersionCurrent && version != kVersionV3 &&
+      version != kVersionV2 && version != kVersionV1) {
     setErr(err, "Unsupported .txl version: " + std::to_string(version));
     return std::nullopt;
   }
@@ -370,7 +374,8 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
     return std::nullopt;
   }
   const bool hasOriginFields = (version >= kVersionV2);
-  const bool acceptsAdjustmentKinds = (version >= kVersionCurrent);
+  const bool acceptsAdjustmentKinds = (version >= kVersionV3);
+  const bool hasClipByte = (version >= kVersionCurrent);
 
   uint32_t w = 0, h = 0;
   int32_t activeLayer = 0;
@@ -402,6 +407,7 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
   for (uint32_t li = 0; li < numLayers; ++li) {
     uint64_t id = 0;
     uint8_t kind = 0, visible = 0, maskEnabled = 0, hasMask = 0;
+    uint8_t clipToBelow = 0;
     float opacity = 1.f;
     uint32_t blend = 0, nameLen = 0;
     readRaw(in, id);
@@ -409,6 +415,7 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
     readRaw(in, visible);
     readRaw(in, maskEnabled);
     readRaw(in, hasMask);
+    if (hasClipByte) readRaw(in, clipToBelow);
     readRaw(in, opacity);
     readRaw(in, blend);
 
@@ -526,6 +533,7 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
     layer->blend = static_cast<BlendMode>(blend);
     layer->originX = originX;
     layer->originY = originY;
+    layer->clipToBelow = (clipToBelow != 0);
 
     if (hasMask) {
       // Pixel masks match the backing image; adjustment masks are doc-sized

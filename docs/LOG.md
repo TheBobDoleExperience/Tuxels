@@ -100,3 +100,41 @@ Append-only. Never rewrite history. Dated entries in ISO-8601.
 - 277 tests passing across 29 executables (was 275/27 at v0.3.0-m3).
   Build clean. Headless smoke test (`QT_QPA_PLATFORM=offscreen ./build/tuxels`)
   starts the app cleanly.
+
+### M4-S1 — Adjustment-layer clip-to-layer flag
+
+- `LayerBase::clipToBelow` bool field added (on the base, not just
+  `AdjustmentLayer`, so future PixelLayer clipping can reuse it
+  without surgery — M4 only honors it for adjustment layers).
+- `compositor/compose.cpp::composeTileRange` carries a per-tile
+  `lastBaseAlpha[kTilePixels]` buffer + `hasBase` flag. Every
+  non-clipped pixel layer's source alpha (pre-blend) is captured
+  into the buffer; clipped adjustments multiply the per-pixel lerp
+  factor `f *= lastBaseAlpha[idx]`. Adjustment layers (clipped or
+  unclipped) do NOT update `lastBaseAlpha` — only pixel layers
+  reset the base. Clipped adjustment with no preceding pixel
+  layer is skipped entirely (matches PS).
+- `.txl` bumped to v4 — new `ClipToBelow : uint8` byte after
+  `HasMask` and before `Opacity` in the layer record. v1/v2/v3
+  readers preserved (load with `clipToBelow == false`); writer
+  always emits v4. Format-comment header updated.
+- `LayerRowWidget` now shows a `↳` glyph + tooltip when the bound
+  layer has `clipToBelow == true`, hidden otherwise. New
+  `contextMenuEvent` override offers "Create Clipping Mask" /
+  "Release Clipping Mask" on the row body. Emits a new
+  `toggleClipToBelowRequested(LayerBase*)` signal.
+- `MainWindow::onToggleClipToBelow` (Ctrl+Alt+G — PS default) and
+  `onLayerToggleClipToBelow(LayerBase*)` (right-click route from
+  LayerRowWidget): both flip `clipToBelow` and push a
+  `LayerOpCommand` (id-keyed lookup so undo/redo survives reorders),
+  label `"Create Clipping Mask"` / `"Release Clipping Mask"` based
+  on direction. No-op when active is the bottom layer (no base);
+  status bar shows a hint. Menu item under `Layer → Create Clipping
+  Mask…`.
+- 285 tests across 30 executables (was 277/29). 5 new cases in
+  `test_clip_to_below`: unclipped affects full doc, clipped gated
+  by base alpha, two adjacent clipped share one base, clipped-with-
+  no-base no-op, unclipped adjustment doesn't reset the base.
+  2 new cases in `test_txl_io`: v4 round-trip of mixed
+  clipped/unclipped layers, hand-crafted v3 file loads with
+  `clipToBelow == false`. Headless smoke test green.

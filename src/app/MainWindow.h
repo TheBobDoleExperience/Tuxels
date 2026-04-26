@@ -62,6 +62,8 @@ class MainWindow : public QMainWindow {
   void onLayerMaskEnabledToggle(LayerBase* layer, bool oldVal, bool newVal);
   void onLayerDeleteMaskRequest(LayerBase* layer);
   void onEditAdjustmentRequested(LayerBase* layer);
+  void onToggleClipToBelow();
+  void onLayerToggleClipToBelow(LayerBase* layer);
   void onSelectAll();
   void onDeselect();
   void onSelectInverse();

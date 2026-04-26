@@ -38,6 +38,16 @@ class LayerBase {
   int originX = 0;
   int originY = 0;
 
+  // PS "Create Clipping Mask" flag (M4-S1). When true and this layer is an
+  // adjustment, compose gates the adjustment's effect by the per-pixel alpha
+  // of the most recent non-clipped pixel layer below — so the adjustment
+  // only modifies pixels where the base layer below is opaque. Multiple
+  // contiguous clipped layers share the same base. Clipped adjustment with
+  // no preceding pixel layer = no-op (matches PS).
+  // Field lives on the base so a future PixelLayer-clipping path can reuse
+  // it without surgery, but M4 only honors the flag for adjustment layers.
+  bool clipToBelow = false;
+
   // Tells the compositor which rendering path applies. `PixelLayer` uses the
   // default; `AdjustmentLayer` overrides to `Adjustment`.
   virtual LayerKind kind() const { return LayerKind::Pixel; }

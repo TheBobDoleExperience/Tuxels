@@ -48,6 +48,10 @@ class LayerRowWidget : public QWidget {
   // Click on an adjustment layer's thumb — open the edit dialog instead of
   // swapping the paint target (adjustment layers have no pixel data).
   void editAdjustmentRequested(LayerBase* layer);
+  // Right-click → "Create Clipping Mask" / "Release Clipping Mask" on the
+  // row body. Toggles `clipToBelow` on the bound layer (M4-S1 PS-style
+  // clip-to-layer). MainWindow wraps in a LayerOpCommand for undo.
+  void toggleClipToBelowRequested(LayerBase* layer);
 
  protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
@@ -71,12 +75,16 @@ class LayerRowWidget : public QWidget {
   float opacityBeforeDrag_ = 1.f;
 
   QCheckBox* visCheck_ = nullptr;
+  QLabel* clipGlyph_ = nullptr;
   QLabel* thumb_ = nullptr;
   QLabel* maskThumb_ = nullptr;
   QLabel* nameLabel_ = nullptr;
   QComboBox* blendCombo_ = nullptr;
   QSlider* opacitySlider_ = nullptr;
   QLabel* opacityValue_ = nullptr;
+
+ protected:
+  void contextMenuEvent(QContextMenuEvent* event) override;
 };
 
 }  // namespace tuxels

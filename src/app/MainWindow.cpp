@@ -143,6 +143,11 @@ void MainWindow::buildMenus() {
   auto* delMaskAct = layerMenu->addAction(tr("D&elete Layer Mask"));
   connect(delMaskAct, &QAction::triggered, this, &MainWindow::onDeleteLayerMask);
 
+  auto* clipAct = layerMenu->addAction(tr("Create Clipping Mas&k"));
+  clipAct->setShortcut(QKeySequence(tr("Ctrl+Alt+G")));
+  connect(clipAct, &QAction::triggered, this,
+          &MainWindow::onToggleClipToBelow);
+
   layerMenu->addSeparator();
   auto* adjMenu = layerMenu->addMenu(tr("New &Adjustment Layer"));
   auto* addLevelsAct = adjMenu->addAction(tr("&Levels…"));
@@ -334,6 +339,8 @@ void MainWindow::buildDocks() {
           &MainWindow::onLayerDeleteMaskRequest);
   connect(layersPanel_, &LayersPanel::editAdjustmentRequested, this,
           &MainWindow::onEditAdjustmentRequested);
+  connect(layersPanel_, &LayersPanel::toggleClipToBelowRequested, this,
+          &MainWindow::onLayerToggleClipToBelow);
 }
 
 void MainWindow::setDocument(std::unique_ptr<Document> doc) {
@@ -1333,6 +1340,55 @@ void MainWindow::onEditAdjustmentRequested(LayerBase* layer) {
     }
     return;
   }
+}
+
+void MainWindow::onToggleClipToBelow() {
+  if (!doc_) return;
+  const int active = doc_->activeLayerIndex();
+  if (active < 0 || active >= static_cast<int>(doc_->tree().size())) return;
+  onLayerToggleClipToBelow(doc_->tree().at(static_cast<std::size_t>(active)));
+}
+
+void MainWindow::onLayerToggleClipToBelow(LayerBase* layer) {
+  if (!doc_ || !layer) return;
+  // Bottom layer has no base to clip to — leave as-is. PS greys out the
+  // menu item in this case; we just no-op.
+  if (!doc_->tree().empty() && doc_->tree().at(0) == layer) {
+    statusBar()->showMessage(
+        tr("Bottom layer can't be clipped — needs a base layer below."),
+        2000);
+    return;
+  }
+  const LayerId id = layer->id;
+  const bool wasClipped = layer->clipToBelow;
+  layer->clipToBelow = !wasClipped;
+  layersPanel_->refresh();
+  canvas_->requestRecomposite();
+  auto findById = [this](LayerId target) -> LayerBase* {
+    for (std::size_t i = 0; i < doc_->tree().size(); ++i) {
+      LayerBase* l = doc_->tree().at(i);
+      if (l->id == target) return l;
+    }
+    return nullptr;
+  };
+  auto doIt = [this, id, newVal = !wasClipped, findById]() {
+    if (auto* l = findById(id)) {
+      l->clipToBelow = newVal;
+      layersPanel_->refresh();
+      canvas_->requestRecomposite();
+    }
+  };
+  auto undoIt = [this, id, oldVal = wasClipped, findById]() {
+    if (auto* l = findById(id)) {
+      l->clipToBelow = oldVal;
+      layersPanel_->refresh();
+      canvas_->requestRecomposite();
+    }
+  };
+  const std::string label =
+      wasClipped ? "Release Clipping Mask" : "Create Clipping Mask";
+  undoStack_->push(std::make_unique<LayerOpCommand>(label, std::move(doIt),
+                                                     std::move(undoIt)));
 }
 
 void MainWindow::onBrushSizeIncrease() {

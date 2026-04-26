@@ -49,11 +49,18 @@ void composeTileRange(const LayerTree& tree, TuxImage& out, int tx0, int ty0,
   std::vector<Rgba32F> accum(kTilePixels);
   std::vector<Rgba32F> layerTile(kTilePixels);
   std::vector<Rgba32F> adjScratch(kTilePixels);
+  // Per-tile capture of the most recent non-clipped pixel layer's source
+  // alpha. M4-S1: clipped adjustments multiply their lerp factor by this
+  // so the effect is gated by the base layer's alpha. `hasBase` becomes
+  // true the first time a pixel layer renders into the tile; resets per
+  // tile (next outer iteration).
+  std::vector<float> lastBaseAlpha(kTilePixels);
 
   for (int ty = ty0; ty < ty1; ++ty) {
     for (int tx = tx0; tx < tx1; ++tx) {
       const TileCoord tc{tx, ty};
       std::fill(accum.begin(), accum.end(), Rgba32F::transparent());
+      bool hasBase = false;
 
       for (std::size_t li = 0; li < tree.size(); ++li) {
         const LayerBase* layer = tree.at(li);
@@ -68,7 +75,15 @@ void composeTileRange(const LayerTree& tree, TuxImage& out, int tx0, int ty0,
           // matches compose tile alignment (adjustment layers have
           // origin (0,0) and a doc-sized mask), so one tile lookup
           // covers the whole inner loop.
+          //
+          // M4-S1 clipping mask path: when `clipToBelow` is set and a base
+          // layer has been seen for this tile, multiply the lerp factor
+          // by `lastBaseAlpha[idx]` so the adjustment is confined to the
+          // base layer's opaque region. With no preceding base, the
+          // clipped adjustment is a no-op (matches PS).
           const auto* adj = static_cast<const AdjustmentLayer*>(layer);
+          if (layer->clipToBelow && !hasBase) continue;
+
           adjScratch = accum;
           adj->applyToAccum(tc, adjScratch.data());
 
@@ -76,13 +91,15 @@ void composeTileRange(const LayerTree& tree, TuxImage& out, int tx0, int ty0,
           const Tile* maskTile =
               hasMask ? layer->mask->image.tiles().find(tc) : nullptr;
           const float opacity = layer->opacity;
+          const bool clipped = layer->clipToBelow;
 
           for (int py = 0; py < kTilePx; ++py) {
             for (int px = 0; px < kTilePx; ++px) {
               const int idx = py * kTilePx + px;
               if (accum[idx].a <= 0.f) continue;
               const float maskV = maskTile ? maskTile->at(px, py).r : 1.f;
-              const float f = opacity * maskV;
+              float f = opacity * maskV;
+              if (clipped) f *= lastBaseAlpha[idx];
               if (f <= 0.f) continue;
               const Rgba32F a = accum[idx];
               const Rgba32F b = adjScratch[idx];
@@ -91,6 +108,10 @@ void composeTileRange(const LayerTree& tree, TuxImage& out, int tx0, int ty0,
                             a.b * inv + b.b * f, a.a * inv + b.a * f};
             }
           }
+          // Adjustment layers do NOT update lastBaseAlpha — they're
+          // transformations of the composite, not base content. The next
+          // clipped adjustment in the stack still gates against the same
+          // pixel layer below.
           continue;
         }
 
@@ -109,6 +130,15 @@ void composeTileRange(const LayerTree& tree, TuxImage& out, int tx0, int ty0,
         const BlendMode mode = layer->blend;
         const float opacity = layer->opacity;
         if (opacity <= 0.f) continue;
+
+        // Capture this layer's source alpha for any clipped adjustments
+        // immediately above it. Done before blending so we record the
+        // layer's own contribution alpha, not the post-blend accumulator
+        // alpha (which would also include layers below).
+        for (int i = 0; i < kTilePixels; ++i) {
+          lastBaseAlpha[i] = layerTile[i].a;
+        }
+        hasBase = true;
 
         for (int py = 0; py < kTilePx; ++py) {
           for (int px = 0; px < kTilePx; ++px) {

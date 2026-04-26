@@ -643,6 +643,90 @@ TEST(txl_v3_reader_rejects_unknown_kind_byte) {
   CHECK(!err.empty());
 }
 
+TEST(txl_v4_round_trip_preserves_clipToBelow) {
+  const std::string path = tmpPath("clip");
+  PathGuard g{path};
+
+  auto doc = std::make_unique<Document>(32, 32);
+  // Layer 0 (bottom) — pixel base, unclipped.
+  auto bg = std::make_unique<PixelLayer>(32, 32);
+  bg->image.fill(kRed);
+  doc->tree().add(std::move(bg));
+  // Layer 1 — Levels adjustment with clipToBelow = true.
+  auto levels = std::make_unique<LevelsAdjustment>();
+  levels->name = "Clipped Levels";
+  levels->clipToBelow = true;
+  doc->tree().add(std::move(levels));
+  // Layer 2 — pixel layer, NOT clipped.
+  auto top = std::make_unique<PixelLayer>(32, 32);
+  top->image.fill(kBlue);
+  top->clipToBelow = false;
+  doc->tree().add(std::move(top));
+
+  std::string err;
+  CHECK(saveTxl(path, *doc, &err));
+
+  auto loaded = loadTxl(path, &err);
+  CHECK(loaded.has_value());
+  CHECK_EQ(static_cast<int>((*loaded)->tree().size()), 3);
+  CHECK(!(*loaded)->tree().at(0)->clipToBelow);
+  CHECK((*loaded)->tree().at(1)->clipToBelow);
+  CHECK(!(*loaded)->tree().at(2)->clipToBelow);
+  CHECK_EQ((*loaded)->tree().at(1)->name, std::string("Clipped Levels"));
+}
+
+TEST(txl_v3_file_loads_with_clipToBelow_false) {
+  // Hand-crafted v3 file with one pixel layer using the pre-clip-flag
+  // layout (no ClipToBelow byte). Reader must load with clipToBelow=false.
+  const std::string path = tmpPath("v3compat");
+  PathGuard g{path};
+  {
+    std::ofstream out(path, std::ios::binary);
+    const char magic[8] = {'T', 'U', 'X', 'E', 'L', 'S', '\x01', '\x00'};
+    out.write(magic, 8);
+    auto wU32 = [&](uint32_t v) {
+      out.write(reinterpret_cast<const char*>(&v), 4);
+    };
+    auto wU8 = [&](uint8_t v) {
+      out.write(reinterpret_cast<const char*>(&v), 1);
+    };
+    auto wI32 = [&](int32_t v) {
+      out.write(reinterpret_cast<const char*>(&v), 4);
+    };
+    auto wU64 = [&](uint64_t v) {
+      out.write(reinterpret_cast<const char*>(&v), 8);
+    };
+    wU32(3);  // version = v3 (no clip byte)
+    wU32(0);  // flags
+    wU32(8); wU32(8);  // doc dims
+    wI32(-1);  // active = none
+    wU8(0); wU8(0);  // paintTarget, hasSelection
+    uint16_t reserved = 0;
+    out.write(reinterpret_cast<const char*>(&reserved), 2);
+    wU32(1);  // num layers
+
+    // Layer record (v3 format — no ClipToBelow byte).
+    wU64(1);  // id
+    wU8(1);   // kind = PixelLayer
+    wU8(1);   // visible
+    wU8(0);   // maskEnabled
+    wU8(0);   // hasMask
+    float opacity = 1.f;
+    out.write(reinterpret_cast<const char*>(&opacity), 4);
+    wU32(0);  // blend = Normal
+    wU32(8); wU32(8);  // layerW/H
+    wI32(0); wI32(0);  // originX/Y
+    wU32(0);  // nameLen
+    wU32(0);  // numImageTiles (no actual tiles)
+    wU32(0);  // numMaskTiles (hasMask=false → still emit)
+  }
+  std::string err;
+  auto loaded = loadTxl(path, &err);
+  CHECK(loaded.has_value());
+  CHECK_EQ(static_cast<int>((*loaded)->tree().size()), 1);
+  CHECK(!(*loaded)->tree().at(0)->clipToBelow);
+}
+
 }  // namespace tuxels
 
 int main() { return tuxels::testing::run(); }

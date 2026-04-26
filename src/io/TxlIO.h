@@ -8,24 +8,27 @@ namespace tuxels {
 
 class Document;
 
-// Tuxels native file format (v3). Uncompressed little-endian binary that
+// Tuxels native file format (v4). Uncompressed little-endian binary that
 // round-trips everything the editor model currently owns: document
 // dimensions, layer tree (with id / name / visibility / opacity / blend
 // mode / origin / dimensions / paint-target / active-layer / non-destructive
-// adjustment params), each PixelLayer's tile-sparse TuxImage, each attached
-// LayerMask, and the current SelectionMask.
+// adjustment params / clip-to-below flag), each PixelLayer's tile-sparse
+// TuxImage, each attached LayerMask, and the current SelectionMask.
 //
 // v2 (M2-S0) added per-layer LayerWidth, LayerHeight, OriginX, OriginY so
 // placed / moved / transformed layers survive save-load.
 // v3 (M3-S4) dispatches on a per-layer `Kind` byte so non-destructive
 // adjustment layers (Levels, Curves, ...) round-trip alongside pixel layers.
-// v1 and v2 files remain readable — v1 loads with origin=(0,0) and layer
-// dims = doc dims; v2 loads as-is (all layers are pixel-kind by construction).
+// v4 (M4-S1) appends a `ClipToBelow` byte to each layer record so PS-style
+// "Create Clipping Mask" survives save-load.
+// v1, v2, and v3 files remain readable — v1 loads with origin=(0,0) and
+// layer dims = doc dims; v2/v3 load as-is. All pre-v4 records load with
+// `clipToBelow == false` (the flag didn't exist).
 //
 // Format layout (header + repeated layer chunks + optional selection chunk):
 //
 //   Magic         : char[8]  = "TUXELS\\x01\\x00"
-//   Version       : uint32   = 3
+//   Version       : uint32   = 4
 //   Flags         : uint32   = 0  (reserved; readers must error on unknown)
 //   DocWidth      : uint32
 //   DocHeight     : uint32
@@ -46,6 +49,8 @@ class Document;
 //     Visible       : uint8
 //     MaskEnabled   : uint8
 //     HasMask       : uint8
+//     ClipToBelow   : uint8    (v4+; absent in v1/v2/v3 — defaults to 0.
+//                               Honored only for adjustment kinds in M4.)
 //     Opacity       : float32
 //     BlendMode     : uint32   (BlendMode enum ordinal)
 //     LayerWidth    : uint32   (v2+; absent in v1 — defaults to DocWidth.

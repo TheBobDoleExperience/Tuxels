@@ -1,7 +1,9 @@
 #include "ui/LayerRowWidget.h"
 
+#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QContextMenuEvent>
 #include <QFont>
 #include <QHBoxLayout>
 #include <QImage>
@@ -45,6 +47,18 @@ LayerRowWidget::LayerRowWidget(QWidget* parent) : QWidget(parent) {
   visCheck_->setToolTip(tr("Toggle visibility"));
   visCheck_->setChecked(true);
   layout->addWidget(visCheck_);
+
+  // Clip-to-below indicator (M4-S1). Only visible when the bound layer has
+  // `clipToBelow == true`. Acts as a visual indent affordance — the row
+  // appears nested under the layer below it (matches PS).
+  clipGlyph_ = new QLabel(QStringLiteral("↳"), this);
+  clipGlyph_->setFixedWidth(14);
+  clipGlyph_->setAlignment(Qt::AlignCenter);
+  clipGlyph_->setToolTip(
+      tr("Clipped — affects only the layer immediately below"));
+  clipGlyph_->setStyleSheet("color: rgba(180, 180, 180, 220);");
+  clipGlyph_->setVisible(false);
+  layout->addWidget(clipGlyph_);
 
   thumb_ = new QLabel(this);
   thumb_->setFixedSize(kThumbPx, kThumbPx);
@@ -111,6 +125,7 @@ void LayerRowWidget::bindToLayer(LayerBase* layer) {
       if (kBlendList[i] == layer_->blend) { idx = static_cast<int>(i); break; }
     }
     blendCombo_->setCurrentIndex(idx);
+    if (clipGlyph_) clipGlyph_->setVisible(layer_->clipToBelow);
     rebuildThumbnail();
     rebuildMaskThumbnail();
     updateThumbHighlight();
@@ -297,6 +312,21 @@ void LayerRowWidget::rebuildMaskThumbnail() {
   }
   maskThumb_->setPixmap(QPixmap::fromImage(img));
   maskThumb_->show();
+}
+
+void LayerRowWidget::contextMenuEvent(QContextMenuEvent* event) {
+  if (!layer_) {
+    QWidget::contextMenuEvent(event);
+    return;
+  }
+  QMenu menu(this);
+  const bool clipped = layer_->clipToBelow;
+  auto* clipAct = menu.addAction(clipped ? tr("Release Clipping Mask")
+                                          : tr("Create Clipping Mask"));
+  clipAct->setShortcut(QKeySequence("Ctrl+Alt+G"));
+  QAction* chosen = menu.exec(event->globalPos());
+  if (chosen == clipAct) emit toggleClipToBelowRequested(layer_);
+  event->accept();
 }
 
 void LayerRowWidget::updateThumbHighlight() {

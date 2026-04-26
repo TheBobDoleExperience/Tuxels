@@ -41,6 +41,7 @@ class LayersPanel : public QDockWidget {
   void maskEnabledToggleRequested(LayerBase* layer, bool oldVal, bool newVal);
   void deleteMaskRequested(LayerBase* layer);
   void editAdjustmentRequested(LayerBase* layer);
+  void toggleClipToBelowRequested(LayerBase* layer);
 
  private slots:
   void onCurrentRowChanged(int row);
