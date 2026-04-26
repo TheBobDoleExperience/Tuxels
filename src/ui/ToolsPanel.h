@@ -2,6 +2,7 @@
 
 #include <QColor>
 #include <QDockWidget>
+#include <unordered_map>
 
 #include "core/SelectionMask.h"
 #include "tools/ToolId.h"
@@ -17,85 +18,56 @@ namespace tuxels {
 
 class BrushTool;
 class BucketTool;
+class CollapsibleSection;
 class LassoTool;
 class MagicWandTool;
 class PolyLassoTool;
 class SelectByColorTool;
 
-// Left-side dock: tool picker (Brush / Marquee / …) plus the active tool's
-// parameter controls. Brush: fg/bg swatches + size/hardness/opacity/flow.
-// Non-paint tools hide the brush panel. Pushes straight into the live
-// BrushTool — no intermediate model, the sliders ARE the source of truth
-// for brush params until the tool system grows a richer settings store.
+// Left-side dock: a vertical accordion of named tool sections, plus a fixed
+// foreground/background color row pinned at the top. Each section has its own
+// chevron-driven collapse state; sections do NOT auto-collapse when another
+// is activated, and clicking a section's header activates the tool but never
+// affects collapse state. Manual chevron clicks are the only path that flips
+// expansion.
+//
+// Public surface preserved verbatim from the M3 letter-button picker so
+// MainWindow wiring is unchanged: same tool setters, same signals, same
+// `setMarqueeMode` / `setWandMode` / `setLassoMode` reflectors.
 class ToolsPanel : public QDockWidget {
   Q_OBJECT
 
  public:
   explicit ToolsPanel(QWidget* parent = nullptr);
 
-  // Attach the live BrushTool. The panel pushes changes into it and
-  // reflects its current state.
   void setBrushTool(BrushTool* tool);
-  // Pull fresh values from the tool (after, e.g., `[`/`]` changed the size
-  // behind the panel's back) and update all widgets without triggering
-  // edit signals.
   void refreshFromBrush();
 
-  // Attach the live BucketTool. The panel pushes tolerance / opacity /
-  // contiguous changes straight into it; the foreground swatch already
-  // drives the fill color (same source of truth as the brush color).
   void setBucketTool(BucketTool* tool);
-
-  // Attach the live MagicWandTool. The panel pushes tolerance and combine
-  // mode into it; the tool's own pending commit is consumed by MainWindow
-  // on press.
   void setMagicWandTool(MagicWandTool* tool);
-
-  // Attach the live SelectByColorTool. Shares the wand options row — same
-  // tolerance slider + combine-mode buttons drive both tools, matching
-  // Photoshop's grouped-tool UX (Shift-W cycles between them). The panel
-  // pushes changes into both so the setting is tool-agnostic.
   void setSelectByColorTool(SelectByColorTool* tool);
-
-  // Attach the live lasso tools. Both share the same options row — one
-  // persistent combine mode that applies to whichever lasso is active.
-  // The panel pushes mode changes into both tools so swapping between
-  // Lasso and Polygonal Lasso doesn't silently flip the mode.
   void setLassoTools(LassoTool* lasso, PolyLassoTool* polyLasso);
 
-  // Reflect the currently-active tool in the picker UI (without emitting
-  // toolPicked). Called after MainWindow switches tools via a keyboard
-  // shortcut so the button state stays in sync.
+  // Reflect the active tool in the section header highlighting (does not
+  // affect collapse state — the user's manual choices stick).
   void setActiveTool(ToolId id);
 
-  // Reflect the marquee's persistent combine mode in the options row
-  // (without emitting marqueeModeChanged). Used when the mode is driven
-  // from outside the panel (e.g., future keyboard shortcuts).
+  // Reflect persistent combine modes in their respective sections' buttons
+  // (without emitting *ModeChanged). Wand and SBC share state — both
+  // sections' buttons mirror it. Same for Lasso / Polygonal Lasso.
   void setMarqueeMode(SelectionMode m);
-
-  // Reflect the magic wand's persistent combine mode in its options row.
   void setWandMode(SelectionMode m);
-
-  // Reflect the shared lasso combine mode in the lasso options row.
   void setLassoMode(SelectionMode m);
 
+  // Test-only accessor: get the section widget for a given tool, or nullptr
+  // if none. Lets unit tests drive simulateHeaderClick / inspect highlight
+  // state without screen scraping.
+  CollapsibleSection* sectionFor(ToolId id) const;
+
  signals:
-  // Fired when the user clicks a picker button. MainWindow wires this to
-  // actually swap the active tool on CanvasView.
   void toolPicked(ToolId id);
-
-  // Fired when the user picks a marquee combine mode (New/Add/Subtract/
-  // Intersect). MainWindow wires this to MarqueeTool::setMode. Exists so
-  // Subtract/Intersect stay reachable on WMs that grab Alt-drag for
-  // window-move.
   void marqueeModeChanged(SelectionMode m);
-
-  // Same idea for the magic wand — Subtract/Intersect stay reachable
-  // without Alt.
   void wandModeChanged(SelectionMode m);
-
-  // Shared across Lasso and Polygonal Lasso — MainWindow pushes the
-  // chosen mode into both tools.
   void lassoModeChanged(SelectionMode m);
 
  public slots:
@@ -120,59 +92,38 @@ class ToolsPanel : public QDockWidget {
   void applyFgToBrush();
   void updateSwatchColors();
 
+  QWidget* buildMoveBody(QWidget* parent);
+  QWidget* buildMarqueeBody(QWidget* parent);
+  QWidget* buildLassoBody(QWidget* parent, bool poly);
+  QWidget* buildWandBody(QWidget* parent, bool sbc);
+  QWidget* buildCropBody(QWidget* parent);
+  QWidget* buildBrushBody(QWidget* parent);
+  QWidget* buildBucketBody(QWidget* parent);
+  QWidget* buildTransformBody(QWidget* parent);
+
+  CollapsibleSection* addSection(QWidget* root, ToolId id, const QString& name,
+                                 const QString& shortcut, QWidget* body);
+
   BrushTool* brush_ = nullptr;
+  BucketTool* bucket_ = nullptr;
+  MagicWandTool* wand_ = nullptr;
+  SelectByColorTool* selectByColor_ = nullptr;
+  LassoTool* lasso_ = nullptr;
+  PolyLassoTool* polyLasso_ = nullptr;
+
   QColor fg_ = Qt::black;
   QColor bg_ = Qt::white;
   bool suppressEdits_ = false;
-
-  QToolButton* pickBrushBtn_ = nullptr;
-  QToolButton* pickMarqueeBtn_ = nullptr;
-  QToolButton* pickBucketBtn_ = nullptr;
-  QToolButton* pickWandBtn_ = nullptr;
-  QToolButton* pickCropBtn_ = nullptr;
-  QToolButton* pickMoveBtn_ = nullptr;
-  QToolButton* pickTransformBtn_ = nullptr;
-  QToolButton* pickLassoBtn_ = nullptr;
-  QToolButton* pickPolyLassoBtn_ = nullptr;
-  QToolButton* pickSelectByColorBtn_ = nullptr;
-  QWidget* brushGroup_ = nullptr;
-  QWidget* marqueeGroup_ = nullptr;
-  QWidget* bucketGroup_ = nullptr;
-  QWidget* wandGroup_ = nullptr;
-  QWidget* lassoGroup_ = nullptr;
-  QToolButton* marqueeReplaceBtn_ = nullptr;
-  QToolButton* marqueeAddBtn_ = nullptr;
-  QToolButton* marqueeSubtractBtn_ = nullptr;
-  QToolButton* marqueeIntersectBtn_ = nullptr;
-  QToolButton* wandReplaceBtn_ = nullptr;
-  QToolButton* wandAddBtn_ = nullptr;
-  QToolButton* wandSubtractBtn_ = nullptr;
-  QToolButton* wandIntersectBtn_ = nullptr;
-  QToolButton* lassoReplaceBtn_ = nullptr;
-  QToolButton* lassoAddBtn_ = nullptr;
-  QToolButton* lassoSubtractBtn_ = nullptr;
-  QToolButton* lassoIntersectBtn_ = nullptr;
-
-  BucketTool* bucket_ = nullptr;
-  QSlider* bucketToleranceSlider_ = nullptr;
-  QLabel* bucketToleranceLabel_ = nullptr;
-  QSlider* bucketOpacitySlider_ = nullptr;
-  QLabel* bucketOpacityLabel_ = nullptr;
-
-  MagicWandTool* wand_ = nullptr;
-  SelectByColorTool* selectByColor_ = nullptr;
-  QLabel* wandHeader_ = nullptr;
-  QSlider* wandToleranceSlider_ = nullptr;
-  QLabel* wandToleranceLabel_ = nullptr;
-
-  LassoTool* lasso_ = nullptr;
-  PolyLassoTool* polyLasso_ = nullptr;
 
   QFrame* fgSwatch_ = nullptr;
   QFrame* bgSwatch_ = nullptr;
   QToolButton* swapBtn_ = nullptr;
   QToolButton* resetBtn_ = nullptr;
 
+  // Sections, indexed by ToolId. Owned by the dock's central widget.
+  std::unordered_map<int, CollapsibleSection*> sections_;
+
+  // Brush body widgets
   QSlider* sizeSlider_ = nullptr;
   QSpinBox* sizeSpin_ = nullptr;
   QSlider* hardnessSlider_ = nullptr;
@@ -187,6 +138,45 @@ class ToolsPanel : public QDockWidget {
   QLabel* opacityJitterLabel_ = nullptr;
   QSlider* spacingSlider_ = nullptr;
   QLabel* spacingLabel_ = nullptr;
+
+  // Bucket body widgets
+  QSlider* bucketToleranceSlider_ = nullptr;
+  QLabel* bucketToleranceLabel_ = nullptr;
+  QSlider* bucketOpacitySlider_ = nullptr;
+  QLabel* bucketOpacityLabel_ = nullptr;
+
+  // Wand body widgets (shared sliders between Wand and SBC sections; each
+  // section gets its own QSlider/Label pair, kept in sync via setWandMode).
+  QSlider* wandToleranceSlider_ = nullptr;
+  QLabel* wandToleranceLabel_ = nullptr;
+  QSlider* sbcToleranceSlider_ = nullptr;
+  QLabel* sbcToleranceLabel_ = nullptr;
+
+  // Combine-mode buttons. Marquee owns its own; Lasso / PolyLasso each have
+  // their own row but share the lasso state; Wand / SBC each have their own
+  // row but share the wand state.
+  QToolButton* marqueeReplaceBtn_ = nullptr;
+  QToolButton* marqueeAddBtn_ = nullptr;
+  QToolButton* marqueeSubtractBtn_ = nullptr;
+  QToolButton* marqueeIntersectBtn_ = nullptr;
+
+  QToolButton* lassoReplaceBtn_ = nullptr;
+  QToolButton* lassoAddBtn_ = nullptr;
+  QToolButton* lassoSubtractBtn_ = nullptr;
+  QToolButton* lassoIntersectBtn_ = nullptr;
+  QToolButton* polyLassoReplaceBtn_ = nullptr;
+  QToolButton* polyLassoAddBtn_ = nullptr;
+  QToolButton* polyLassoSubtractBtn_ = nullptr;
+  QToolButton* polyLassoIntersectBtn_ = nullptr;
+
+  QToolButton* wandReplaceBtn_ = nullptr;
+  QToolButton* wandAddBtn_ = nullptr;
+  QToolButton* wandSubtractBtn_ = nullptr;
+  QToolButton* wandIntersectBtn_ = nullptr;
+  QToolButton* sbcReplaceBtn_ = nullptr;
+  QToolButton* sbcAddBtn_ = nullptr;
+  QToolButton* sbcSubtractBtn_ = nullptr;
+  QToolButton* sbcIntersectBtn_ = nullptr;
 };
 
 }  // namespace tuxels

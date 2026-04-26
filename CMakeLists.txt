@@ -69,6 +69,8 @@ add_executable(tuxels
   src/ui/LayerRowWidget.cpp
   src/ui/LayersPanel.h
   src/ui/LayersPanel.cpp
+  src/ui/CollapsibleSection.h
+  src/ui/CollapsibleSection.cpp
   src/ui/BrightnessContrastDialog.h
   src/ui/BrightnessContrastDialog.cpp
   src/ui/CurvesDialog.h
@@ -136,3 +138,27 @@ set_target_properties(test_png_io PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF
 target_include_directories(test_png_io PRIVATE src tests)
 target_link_libraries(test_png_io PRIVATE tuxels_io)
 add_test(NAME test_png_io COMMAND test_png_io)
+
+# Qt-widget tests need AUTOMOC (Q_OBJECT classes under test) and
+# Qt6::Widgets at link time. They construct a QApplication in main(); the
+# test runner sets QT_QPA_PLATFORM=offscreen so they run headless.
+function(tuxels_add_qt_test name)
+  add_executable(${name} tests/${name}.cpp ${ARGN})
+  set_target_properties(${name} PROPERTIES AUTOMOC ON AUTOUIC OFF AUTORCC OFF)
+  target_include_directories(${name} PRIVATE src tests)
+  target_link_libraries(${name} PRIVATE tuxels_core Qt6::Widgets Qt6::Gui)
+  add_test(NAME ${name} COMMAND ${name})
+  set_tests_properties(${name} PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endfunction()
+
+tuxels_add_qt_test(test_collapsible_section
+  src/ui/CollapsibleSection.h
+  src/ui/CollapsibleSection.cpp
+)
+tuxels_add_qt_test(test_tools_panel
+  src/ui/CollapsibleSection.h
+  src/ui/CollapsibleSection.cpp
+  src/ui/ToolsPanel.h
+  src/ui/ToolsPanel.cpp
+)

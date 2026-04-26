@@ -138,11 +138,21 @@ Exclusion:    C = Cs + Cd - 2*Cs*Cd
 
 ### ToolsPanel (UI — left dock)
 
-- `src/ui/ToolsPanel.{h,cpp}`. QDockWidget parked in `Qt::LeftDockWidgetArea`.
-- Foreground/background color swatches: `QColorDialog` on click; `X` (also a global shortcut) swaps; `D` resets to black/white.
-- Sliders for size (1–500 + a 1–2048 spinbox for precise entry), hardness / opacity / flow (0–100%, mapped to the brush's 0–1 params).
-- No intermediate model: edits go straight into the live `RoundBrush`. `refreshFromBrush()` pulls current params back out so `[`/`]` diameter nudges stay in sync.
+- `src/ui/ToolsPanel.{h,cpp}`. QDockWidget parked in `Qt::LeftDockWidgetArea`. Internal layout is a `QScrollArea` wrapping a vertical column: a fixed FG/BG color row pinned at top, then a vertical accordion of one `CollapsibleSection` per tool (M4-S0 architecture).
+- Foreground/background color swatches: `QColorDialog` on click; `X` (also a global shortcut) swaps; `D` resets to black/white. Always visible — they're shared between Brush and Bucket and act as global state, not a Brush-section concern.
+- Each tool has its own `CollapsibleSection` (`src/ui/CollapsibleSection.{h,cpp}`) holding the tool's options as the section body. Header click activates the tool (`toolPicked` signal); chevron click toggles the section's expansion. **Manual chevron is the only path that affects collapse state** — `setActiveTool` only flips highlights, never expands or collapses. The user's expand/collapse state is sticky across tool switches.
+- Section order: Move (V), Marquee (M), Lasso (L), Polygonal Lasso (P), Magic Wand (W), Select By Color (⇧W), Crop (C), Brush (B), Paint Bucket (G), Free Transform (⌃T). Tools without options (Move, Crop, Free Transform) get a one-line tip QLabel as their body so the visual rhythm is uniform.
+- Wand and SBC each have their own combine-mode + tolerance widgets; state is shared (changing tolerance in one section mirrors into the other; `setWandMode` reflects into both rows of buttons). Same pattern for Lasso ↔ PolyLasso.
+- Sliders for brush params (size 1–500 + a 1–2048 spinbox for precise entry, hardness / opacity / flow 0–100%, size jitter / opacity jitter, spacing 1–100% → `spacingRatio ∈ [0.01, 1.0]`) live inside the Brush section's body and write straight into the live `RoundBrush`. `refreshFromBrush()` pulls current params back out so `[` / `]` diameter nudges from MainWindow stay in sync.
 - Internal `Swatch` widget is a plain `QFrame` subclass in an anonymous namespace, no `Q_OBJECT` — uses a stored `std::function` callback instead of a signal, which keeps it off AutoMOC's radar and fully self-contained in the `.cpp`.
+- Test-only accessor `ToolsPanel::sectionFor(ToolId)` returns the `CollapsibleSection*` for a given tool so unit tests can drive `simulateHeaderClick` and inspect `isActive` / `isExpanded` without screen scraping.
+
+### CollapsibleSection (UI — accordion building block, M4-S0)
+
+- `src/ui/CollapsibleSection.{h,cpp}`. Q_OBJECT widget. Header is a `QFrame` with three children: a 14-px-wide chevron `QLabel` (▾ expanded, ▸ collapsed), a bold name `QLabel`, and an optional shortcut hint `QLabel` aligned to the right. Body is a `QWidget` container that wraps the caller's installed body widget.
+- Two distinct gestures dispatched via `eventFilter`. Header eventFilter catches mouse press anywhere in the header → emits `headerClicked` (panel maps to "activate this tool"). Chevron eventFilter catches mouse press on the chevron → toggles `isExpanded` and emits `chevronClicked`. Chevron's filter consumes its event so the header branch never sees a chevron click.
+- `setActive(bool)` updates a stylesheet on the header — left-edge accent stripe + tinted background when active. Does NOT touch expansion. `setExpanded(bool)` shows/hides the body container, updates the chevron glyph.
+- Test hooks `simulateHeaderClick` and `simulateChevronClick` drive the gestures programmatically without synthesizing Qt mouse events. `simulateChevronClick` performs the same toggle-then-emit as the eventFilter path.
 
 ## 12. Brush
 
