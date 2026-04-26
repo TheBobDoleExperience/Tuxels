@@ -284,3 +284,221 @@ Append-only. Never rewrite history. Dated entries in ISO-8601.
 - 307 unit tests passing across 33 executables. `STATUS.md`
   flipped to "M4 ✅ shipped"; `NEXT.md` rewritten for M5 kickoff
   (smart objects / PSD import / layer groups as candidates).
+
+## M5 — Layer Groups
+
+Plan: `/home/james/.claude/plans/let-s-make-a-plan-resilient-engelbart.md`.
+
+### M5-S0 — Tree refactor + GroupLayer skeleton + active-id migration
+
+- New `src/layers/GroupLayer.{h,cpp}`: `GroupLayer : public
+  LayerBase`, owns recursive `std::vector<std::unique_ptr<LayerBase>>
+  children`, default `BlendMode::PassThrough`, `bool isExpanded =
+  true` for UI state, `kind() final → Group`, `renderTile() final
+  → false`.
+- `LayerKind::Group` added to enum. `BlendMode::PassThrough`
+  appended at the end (numeric ordinals 0..12 stay stable for v4
+  back-compat).
+- `LayerTree` extended with recursive helpers: `findById`,
+  `locate(id) → {parent, index}`, `flatten()` (depth-first
+  child-then-self so bottom-up consumers see children before the
+  group node), `forEach(fn)`, `insertAtPath`, `removeFromPath`,
+  cross-parent `move`. All in new `src/layers/LayerTree.cpp`
+  (need `GroupLayer` concretely).
+- `Document` migrated from `int activeLayerIndex_` to
+  `LayerId activeLayerId_`. `activeLayer()` resolves via
+  `tree_.findById`. Legacy `activeLayerIndex()` getter/setter
+  remain as transitional shims that walk root-flat positions.
+- Compose's flat per-tile loop replaced with
+  `for (LayerBase* l : tree.flatten())`; group nodes are
+  `continue`d (S0 stub — S1 turns on real recursion).
+- `MoveLayerCommand`, `TransformCommand` route through
+  `tree.findById`. `CropCommand::Snapshot` becomes
+  `unordered_map<LayerId, LayerEntry>` so reorder between capture
+  and undo routes pixels back to the right layer by id (was
+  index-keyed, latent bug).
+- `MainWindow` migrated through ~25 sites: `prevActive →
+  prevActiveId`, `setActiveLayerIndex(idx) → setActiveLayerId
+  (layer->id)`, the inline `findById` lambda in
+  `onLayerToggleClipToBelow` replaced by `doc_->tree().findById`.
+  `histogramBelow` walks `tree.flatten()`.
+- 9 new `test_layer_tree` cases. 1 new `test_crop` case
+  (id-keyed snapshot survives reorder).
+- 317 tests across 34 executables. Commit `57b07d4`.
+
+### M5-S1 — Compose recursion: Pass-Through + isolated branches
+
+- `compose.cpp` rewritten with recursive
+  `composeChildren(ctx, layers, accum, lastBaseAlpha, hasBase)`
+  helper plus `composeGroupPassThrough` and `composeGroupIsolated`.
+- Pass-Through (the GroupLayer default): hot-path inlines the
+  trivial case (`opacity==1`, no mask, no clip) bit-exact with
+  flat layer list. Otherwise snapshots `accum` into `accumBefore`,
+  recurses, and per-pixel lerps
+  `accum = mix(accumBefore, accum, opacity * maskV)` (with
+  `f *= lastBaseAlpha[idx]` if `clipToBelow`).
+- Isolated (any non-Pass-Through blend): allocates `accum2` +
+  scope-local `lastBaseAlpha2` + `hasBase2 = false`, recurses,
+  then back-composites `accum2` into the parent `accum` via
+  `compositePixel(parentAccum, src, group->blend, f, ...)` with
+  `f = opacity * maskV * (clipToBelow ? lastBaseAlpha[idx] : 1)`.
+  Updates parent's `lastBaseAlpha` from `accum2`'s alpha so a
+  clipped adjustment immediately above gates against the group's
+  contribution.
+- Clipped group with no base = no-op. Defensive
+  `case PassThrough: → bm_normal` in `applyBlend` switch.
+- Buffers (`layerTile`, `adjScratch`) shared via a `Ctx` struct +
+  raw pointers — single allocation per outer `composeTileRange`.
+- 12 new `test_compose_groups` cases: Pass-Through equals flat
+  (bit-exact), PT+adjustment leaks out, isolated+adjustment
+  doesn't leak, isolated opacity multiplies, group mask gates,
+  nested PT inside isolated, clipped group no-base no-op, clipped
+  group gates by base alpha, clipped adjustment inside isolated
+  gates against group-local base only, empty group no-op,
+  invisible group skips recursion, PT with opacity=0.5 partial-leak.
+- 341 tests across 35 executables. Commit `4692f95`.
+
+### M5-S2 — `.txl` v5 with PSD-style group section dividers
+
+- `kVersionCurrent = 5`. New constants `kVersionV4 = 4`,
+  `kLayerKindOpenGroup = 10`, `kLayerKindCloseGroup = 11`.
+- Writer refactored into recursive `writeLayerRecords` helper.
+  Pixel + adjustment kinds emit a single record. Groups emit
+  OpenGroup record (header + `NumImageTiles=0` sentinel + 1-byte
+  `IsExpanded` descriptor + mask block) → recurse children →
+  CloseGroup record (header-only marker, all-zero fields,
+  `NameLen=0`, no payload after the header).
+- New `countRecords` / `countRecordsList` helpers compute on-disk
+  record count for `NumLayers` (groups contribute 2). Documented
+  the semantic shift in `TxlIO.h`.
+- Reader maintains `std::vector<GroupLayer*> groupStack` (empty =
+  root); CloseGroup detected immediately after the standard
+  header (validates version + non-empty stack + `nameLen==0`,
+  pops, continues). OpenGroup constructs `GroupLayer`, reads
+  descriptor + mask, attaches to current parent + pushes onto
+  stack. Existing kinds attach via shared `attach` lambda.
+- v1/v2/v3/v4 readers preserved with explicit version constants
+  + four gating flags. EOF with non-empty stack and CloseGroup
+  with empty stack are both errors.
+- Group masks are doc-sized (extends the existing pixel-vs-non-
+  pixel mask-dim branch).
+- 6 new test_txl_io cases: empty group; group with three pixel
+  children; three-deep nested groups; group attributes (mask +
+  clipToBelow=true + Multiply blend + opacity=0.7 + isExpanded=
+  false + visible) survive intact; mixed-root layout
+  `[pixelA, group{[Levels, pixelB]}, pixelC]` preserves nesting +
+  ids + subclass dispatch; hand-crafted v4 file loads cleanly.
+- 347 tests across 35 executables. Commit `19a4898`.
+
+### M5-S3 — LayersPanel: indented rows + chevron + New Group menu
+
+- `LayerRowWidget` extended for groups:
+  - `chevron_` QLabel between visibility checkbox and clip glyph.
+    Visible only when bound to a `GroupLayer*`. Click emits new
+    `chevronToggled(GroupLayer*)` signal and is swallowed before
+    bubbling to the QListWidgetItem.
+  - Folder-glyph thumb via `QStyle::SP_DirIcon` over a tinted
+    background.
+  - `setIndentDepth(int)` updates the layout's left content margin
+    to `4 + depth*12`.
+  - Two blend lists: `kPixelBlendList` (13, no Pass-Through) and
+    `kGroupBlendList` (14, Pass-Through first); swapped on bind
+    via `rebuildBlendCombo(includePassThrough)`.
+- `LayersPanel` rebuild rewritten: new `buildDisplayList(children,
+  depth, out)` recursive helper walks the tree top-down (PS reading
+  order, children iterated in reverse so the topmost child appears
+  just below its group header), recurses into expanded groups at
+  `depth+1`, skips children of collapsed groups (compose still
+  composites them — collapse is purely UI).
+- `MainWindow::onLayerNewGroup` slot wraps `GroupLayer` creation
+  in `LayerOpCommand` mirroring `onLayerAdd`'s shape; group named
+  "Group N" via `tree.forEach`. `Layer → New Group` menu entry.
+  Disabled placeholders for `Layer → Group Layer` (Ctrl+G) and
+  `Layer → Ungroup Layer` (Ctrl+Shift+G).
+- 6 new `test_layers_panel_groups` cases (Qt-widget): indented
+  top-down rendering with depths [0,0,1,1,0]; chevron collapse
+  hides children + flips `isExpanded`; active highlight on group
+  row; group blend combo has 14 items + Pass-Through, pixel rows
+  have 13 + no Pass-Through; chevron only visible for group rows;
+  collapsed-group walker skips all descendants.
+- 353 tests across 36 executables. Commit `3929f2c`.
+
+### M5-S4 — Group / Ungroup commands + scope-local Up/Down
+
+- `Layer → Group Layer` (Ctrl+G) wraps the active layer in a new
+  group inserted at the active's parent + index. doIt: capture
+  `parentId` + `idx` via `tree.locate`, pluck via `removeFromPath`,
+  build a fresh `GroupLayer` (or reuse a stashed one for redo)
+  with the layer as `children[0]`, `insertAtPath` + set active.
+  undoIt: extract layer back from group, remove group, reinstall
+  layer at original parent+idx, stash group for redo.
+- `Layer → Ungroup Layer` (Ctrl+Shift+G) is enabled only when
+  active is a Group; promotes children into the parent at the
+  group's old index in stored bottom-up order. Active = bottom-
+  most ex-child. Empty-group fallback: parent[oldIdx] →
+  parent.last → parent → 0. undoIt re-collects children by id and
+  rebuilds the stashed group, preserving the group's id.
+- `onLayerNewGroup` refined: inserts at active's parent +
+  (active's index + 1) so the new group appears immediately above
+  the active layer.
+- `onLayerMoveUp/Down` rewritten to be scope-local — uses
+  `tree.locate(activeId)` for parent + idx; top/bottom of group
+  → no-op + status-bar message.
+- Menu enable/disable via new `updateGroupActionStates()` helper,
+  called from `onActiveLayerChanged()` and the Layer menu's
+  `aboutToShow`. Keyboard shortcuts honor the QAction enable bit.
+- 9 new `test_group_commands` cases (non-Qt; replicates closure
+  logic at the Document level): wraps in group at same idx; undo
+  restores original tree + active; ungroup promotes children in
+  stored order; ungroup undo rebuilds with same group id +
+  children; empty-group ungroup just deletes; group → ungroup →
+  undo → undo loop restores initial state; up/down inside a group
+  is scope-local; New Group inserts at (active+1) for both root
+  and inside-group cases.
+- 362 tests across 37 executables. Commit `d20a801`.
+
+### M5-S5 — Group-aware delete + dock + addAdjustment routing
+
+- `onLayerDelete` switched from `tree.removeAt(idx)` (root-only,
+  index-based) to `tree.locate(activeId)` + `removeFromPath`, so
+  deleting a layer inside a group works cleanly. The unique_ptr
+  ownership chain transitively destroys the children when a group
+  is the deleted layer; the closure stash holds the entire
+  subtree so undo `insertAtPath`s everything back.
+- `bindActiveAdjustmentToDock` gains an explicit `LayerKind::Group`
+  arm that calls `bindNothing()` — was implicit fallthrough; now
+  signposted as a hook for the future M6 group-properties pane.
+- The four `onLayerAdd*` slots route through new
+  `computeAdjustmentInsertSlot(activeId)` helper:
+  - Active is a Group → adjustment lands inside the group at the
+    top of its children.
+  - Active is a regular layer → adjustment lands at active's
+    parent + (active+1).
+  - No active → root append (old behavior).
+- **Bug fix in `histogramBelow`:** previously hid every layer
+  at-or-after target in flatten order, *including ancestor
+  groups*. Hiding a parent group skipped the recursion in compose,
+  dropping the group's earlier children from the preview composite
+  even though they should compose normally below the target. Fix:
+  walk the parent chain via `tree.locate` to build a set of
+  target's ancestor groups; keep them visible while hiding
+  everything else past target.
+- 2 new `test_group_commands` cases:
+  `delete_active_group_with_children_round_trip`;
+  `histogram_below_target_inside_passthrough_group`.
+- 364 tests across 37 executables. Commit `276ef98`.
+
+### M5 — substantively complete; ready for user DoD walkthrough (S6)
+
+- Layer groups end-to-end: model (recursive LayerTree +
+  GroupLayer), compose (Pass-Through and isolated branches),
+  `.txl` v5 round-trip with PSD-style section dividers, panel
+  UI (chevron + indent + Pass-Through combo only on groups),
+  commands (Ctrl+G / Ctrl+Shift+G / scope-local Up/Down +
+  context-aware addAdjustment + delete-group with transitive
+  children).
+- v1–v4 `.txl` files still load (without groups). Pre-M5 docs
+  unchanged structurally.
+- 6 commits on `main` between `57b07d4` (S0) and `276ef98` (S5),
+  all building cleanly with 100% test pass each step.
+- Pending: S6 DoD walkthrough (user-driven) → tag `v0.5.0-m5`.

@@ -34,27 +34,35 @@ struct Rgba32F { float r, g, b, a; };  // 16 bytes, aligned
 ## 4. Layer Tree
 
 - M0: flat ordered list `std::vector<std::unique_ptr<LayerBase>>`. Index 0 = bottom layer.
+- M5-S0: tree is now **recursive** via `LayerTree`. Root holds an ordered list of layers (bottom → top, index 0 = bottom); `GroupLayer` nodes own their own ordered child list recursively. The flat-list API (`size()`, `at()`, `move(from,to)`, `insertAt`, `removeAt`) is preserved and operates on root-level children. New path-based helpers (`findById`, `locate(id) → {parent, index}`, `flatten()`, `forEach(fn)`, `insertAtPath`, `removeFromPath`, cross-parent `move(fromParent, fromIdx, toParent, toIdx)`) live in `src/layers/LayerTree.cpp`. `flatten()` returns layers in depth-first **child-then-self** order (bottom-up compose order; the IO writer also uses this).
 - `LayerBase` abstract API:
   - `LayerID id` (monotonic uint64)
   - `std::string name`
   - `bool visible`
   - `float opacity ∈ [0, 1]`
-  - `BlendMode blend` (enum)
+  - `BlendMode blend` (enum; `PassThrough` is the M5 default for groups)
   - `std::unique_ptr<LayerMask> mask` (nullable)
   - `int originX, originY` — doc-coord of the layer's (0, 0) pixel (M2-S0).
+  - `bool clipToBelow` (M4-S1) — adjustment / group effect gated by the per-pixel alpha of the most recent non-clipped pixel layer below.
   - virtual `bool renderTile(TileCoord tc, Rgba32F* out) const` — produces the layer's contribution tile in **doc-coord tile space**, translating by origin and folding the mask into output alpha so `compose()` itself is origin-unaware. Returns false when the tile doesn't intersect the layer's content rect.
-- Concrete M0 subclasses:
+- Concrete subclasses:
   - `PixelLayer` — owns a `TuxImage` sized to the layer's content (not necessarily doc-sized).
+  - `AdjustmentLayer` (abstract, M3-S0) — no backing image; subclasses (Levels, Curves, Hue/Sat, B&C) override `applyToAccum`. `renderTile` returns false.
+  - `GroupLayer` (M5-S0) — owns `std::vector<std::unique_ptr<LayerBase>> children` plus a UI-only `bool isExpanded` (persisted in `.txl` v5). Default blend is `BlendMode::PassThrough`. `renderTile` returns false (compose recursion handles groups directly).
 - **Origin invariants** (M2-S0):
   - Masks share their owning layer's origin AND dimensions *for pixel layers*. Creating a mask sizes it to `layer->image.{width,height}()`, not doc dims.
   - `Document::addBlankPixelLayer(name)` still creates a doc-sized layer at origin `(0, 0)`; `Document::addPixelLayer(TuxImage&&, int ox, int oy, name)` installs a layer at an arbitrary origin (used by Place Image).
-  - Crop intersects each layer's doc-space content rect with the crop rect; surviving rect becomes the new image, origin shifts into the new doc coord frame, non-overlapping layers drop to 0×0 (and lose their mask).
-- **Layer kind discriminator** (M3-S0):
-  - `LayerBase::kind()` returns `LayerKind::Pixel` (default) or `LayerKind::Adjustment`. The compositor dispatches on this — pixel layers go through `renderTile`+blend; adjustment layers go through `applyToAccum`+lerp-back.
-  - `AdjustmentLayer` (abstract, `src/layers/AdjustmentLayer.h`) has no backing image. Its mask is **doc-sized** (not layer-sized) since there's no image to align with; `Document::addAdjustmentLayer<T>` auto-attaches a doc-sized white mask with `enabled = true` and flips `paintTarget` to `Mask` so follow-up brush strokes paint the auto-mask by default (matches PS).
-  - Origin is always `(0, 0)` for adjustment layers. The adjustment-path compose loop exploits this + the mask's tile-grid alignment with the compose tile grid to fetch the mask tile once per compose tile.
-  - `LayerRowWidget` renders adjustment layers with an "fx" glyph thumbnail and routes left-click on the layer thumb to a new `editAdjustmentRequested(LayerBase*)` signal (pixel layers keep the paint-target swap).
-- Future: `GroupLayer`, `SmartObjectLayer`, `TextLayer` (Phase 2+). Concrete adjustment subclasses (Levels, Curves, Hue/Sat, B&C) land in M3-S2/S3/S6.
+  - Crop intersects each layer's doc-space content rect with the crop rect; surviving rect becomes the new image, origin shifts into the new doc coord frame, non-overlapping layers drop to 0×0 (and lose their mask). M5: `applyCropInPlace` walks via `tree.forEach` so children inside groups crop correctly.
+- **Layer kind discriminator** — `LayerBase::kind()` returns `LayerKind::Pixel` / `Adjustment` / `Group`. The compositor dispatches on this:
+  - **Pixel** → `renderTile` + blend.
+  - **Adjustment** → `applyToAccum` + lerp-back. Doc-sized mask; `Document::addAdjustmentLayer<T>` auto-attaches a doc-sized white mask with `enabled = true` and flips `paintTarget` to `Mask`. Origin is always `(0, 0)`. M5-S5: addAdjustment slots route the new layer into the active group / above the active layer (not always root) via `MainWindow::computeAdjustmentInsertSlot`.
+  - **Group** → recursive compose via `composeChildren`; see §7.
+- **Active layer** (M5-S0): tracked by `LayerId activeLayerId_` on `Document` (was `int activeLayerIndex_`). `Document::activeLayer()` resolves via `tree_.findById`. The legacy `activeLayerIndex()` getter/setter remains as a transitional shim that walks root-flat positions for code that hasn't migrated yet (mostly tests + a few root-only boundary checks in MainWindow).
+- `LayerRowWidget` (M5-S3) renders three layer kinds:
+  - **Pixel**: image thumbnail; left-click swaps `paintTarget` between layer + mask.
+  - **Adjustment**: "fx" glyph thumbnail; left-click on the thumb emits `editAdjustmentRequested(LayerBase*)` (for the dialog-only kinds; non-modal kinds use the Properties dock).
+  - **Group**: chevron `▾`/`▸` + folder-glyph thumb (`QStyle::SP_DirIcon`) over a tinted background. Chevron click toggles `isExpanded` and re-walks the panel; blend combo includes "Pass Through" (groups only). `setIndentDepth(int)` sets `4 + depth*12 px` left margin so children of expanded groups visually nest.
+- Future: `SmartObjectLayer`, `TextLayer` (Phase 2+).
 
 ## 5. Masks
 
@@ -94,13 +102,15 @@ Exclusion:    C = Cs + Cd - 2*Cs*Cd
 - Two overloads in `src/compositor/compose.cpp`:
   - `compose(tree, out)` — full recompose over all tiles intersecting the image.
   - `compose(tree, out, Rect pixelRect)` — restrict the tile loop to tiles intersecting `pixelRect` (clipped to image bounds). Used on the paint hot path so a brush stamp only re-touches the tiles it lands on. Both paths go through the same inner `composeTileRange` helper.
-- Walk tile coordinates spanning the target range. For each tile coord:
-  - Start with transparent accumulator (`Rgba32F{0,0,0,0}`).
-  - For each layer (bottom to top) if visible + `opacity > 0`:
-    - **Pixel path** (`kind() == LayerKind::Pixel`): `renderTile` → get layer tile contribution (with origin translation + mask pre-multiplied in). Blend using `layer.blend` and `layer.opacity` against the accumulator.
-    - **Adjustment path** (`kind() == LayerKind::Adjustment`, M3-S0): copy the accumulator into a scratch buffer, call `applyToAccum(tc, scratch)` which the subclass rewrites in place, then lerp `accum → scratch` per pixel using `factor = opacity * maskV` (maskV is `1.0` when no mask/tile, else `maskTile->at(px,py).r`; fetched once per compose tile because adjustment masks are doc-sized and tile-aligned). Skip pixels where `accum.a <= 0` so empty regions stay empty.
+- M5-S1: per-tile body is factored into a recursive `composeChildren(ctx, layers, accum, lastBaseAlpha, hasBase)`. Root call walks `tree.raw()`; group dispatch recurses into `group->children` with shared or isolated state.
+- For each layer in a child list (bottom to top), if visible + `opacity > 0`:
+  - **Group + Pass-Through** (the `GroupLayer` default): hot-path inlines the recursion bit-exact with a flat list when `opacity == 1`, no mask, no clip. Otherwise snapshots `accum` into a scratch buffer, recurses into `group->children` with the parent's `accum` + `lastBaseAlpha` + `hasBase` (children share parent scope, so adjustments inside leak out and clipped adjustments inside gate against outer bases), then per-pixel lerps `accum = mix(accumBefore, accum, opacity * maskV)`. A clipped Pass-Through group with no base below = no-op (skip recursion entirely).
+  - **Group + non-Pass-Through (isolated)**: allocates `accum2` (transparent) + scope-local `lastBaseAlpha2` + `hasBase2 = false`, recurses with these, then back-composites `accum2` into the parent `accum` via `compositePixel(parentAccum, src, group->blend, f, ...)` with `f = opacity * maskV * (clipToBelow ? lastBaseAlpha[idx] : 1)`. After back-composite, parent's `lastBaseAlpha` is updated from `accum2`'s alpha so a clipped adjustment immediately above the group gates against the group's contribution.
+  - **Pixel path** (`kind() == LayerKind::Pixel`): `renderTile` → layer tile contribution (with origin translation + mask pre-multiplied in). Blend using `layer.blend` and `layer.opacity` against the accumulator. Capture this layer's source alpha into `lastBaseAlpha[]` (per-pixel) before blending, so subsequent clipped adjustments / groups gate against this layer's own contribution alpha rather than the post-blend accumulator alpha.
+  - **Adjustment path** (M3-S0): copy the accumulator into a scratch buffer, call `applyToAccum(tc, scratch)` which the subclass rewrites in place, then lerp per pixel using `factor = opacity * maskV` (maskV = `1.0` if no mask/tile else `maskTile->at(px,py).r`; fetched once per compose tile because adjustment masks are doc-sized + tile-aligned). M4-S1: clipped adjustments multiply factor by `lastBaseAlpha[idx]`. Skip pixels where `accum.a <= 0`. Adjustment layers do NOT update `lastBaseAlpha` — they're transformations, not base content.
   - Write accumulator into the corresponding tile of `out`.
-- **Dirty-rect path for paint:** `BrushEngine` tracks `incremental_` in addition to total `bounds_`; each stamp grows both. `ToolBase::takeDirtyRect()` (default empty, `BrushTool` forwards from the engine) drains the rect. `CanvasView` unions incoming rects into `dirtyRect_`; its `paintEvent` calls `compose(tree, out, dirtyRect_)` when set (partial) or `compose(tree, out)` otherwise (full). Only the rows of the cached `QImage` inside the dirty rect are re-quantized, and `QWidget::update(QRect)` limits Qt's repaint area. Full recompose is still used for structural ops (layer reorder, blend/opacity/visibility change, mask toggle, undo/redo) where the dirty region isn't trivially available.
+- Scratch buffers (`layerTile`, `adjScratch`) live in a `Ctx` struct + raw pointers — single allocation per outer `composeTileRange` call, shared across recursion levels (each layer fully consumes them within its iteration). Isolated groups allocate their own per-call `accum2` + `lastBaseAlpha2`.
+- **Dirty-rect path for paint:** `BrushEngine` tracks `incremental_` in addition to total `bounds_`; each stamp grows both. `ToolBase::takeDirtyRect()` (default empty, `BrushTool` forwards from the engine) drains the rect. `CanvasView` unions incoming rects into `dirtyRect_`; its `paintEvent` calls `compose(tree, out, dirtyRect_)` when set (partial) or `compose(tree, out)` otherwise (full). Only the rows of the cached `QImage` inside the dirty rect are re-quantized, and `QWidget::update(QRect)` limits Qt's repaint area. Full recompose is still used for structural ops (layer reorder, blend/opacity/visibility change, mask toggle, undo/redo, group expand/collapse) where the dirty region isn't trivially available.
 - Single-threaded CPU for M0. Multi-thread per-tile (std::async or thread pool) is a simple drop-in for later.
 
 ## 8. Color Management (M0 scope)
@@ -228,6 +238,9 @@ Exclusion:    C = Cs + Cd - 2*Cs*Cd
 - **Mask semantics.** When `hasMask == false`, writers still emit `numMaskTiles u32 = 0` so the layer record has a uniform shape. Readers verify the zero to catch writer/reader drift early.
 - **Layer-id counter.** `Document` gained a `setLayerIdCounter(LayerId)` setter; `loadTxl` seeds it with `max(loaded id)` so a subsequent `addBlankPixelLayer` call on a loaded document cannot collide with an id already in the tree.
 - **Kind enum.** Only `1 = PixelLayer` is valid in v1. Future kinds (adjustment, text, group, smart object) get their own ordinals and readers branch on kind; older readers error cleanly on unknown kinds.
+- **v3 (M3-S4).** Added kinds `2 = LevelsAdjustment`, `3 = CurvesAdjustment`, `4 = HueSaturation`, `5 = BrightnessContrast`. Adjustment kinds write `W=H=0`, `Origin=0`, `NumImageTiles=0` sentinel + a kind-specific descriptor (Levels: 4×5 floats; Curves: per-channel `u32 numPoints + (f32, f32) × N`; Hue/Sat: 3 floats; B&C: 2 floats), then masks through the existing flow. Adjustment masks reconstruct at doc dims (the auto-mask invariant from `Document::addAdjustmentLayer`). v1/v2 readers unchanged.
+- **v4 (M4-S1).** Added `ClipToBelow u8` byte after `HasMask` in the layer record so PS-style clipping survives save/load. Pre-v4 records load with `clipToBelow == false`.
+- **v5 (M5-S2).** Added kinds `10 = OpenGroup` (1-byte `IsExpanded` descriptor + doc-sized mask) and `11 = CloseGroup` (header-only marker, no payload after the standard header). Layer records remain a flat sequence on disk — nesting is reconstructed at load via a parse stack. **`NumLayers` semantic shifts** from "tree size" to "record count on disk" (a group contributes 2 records: open + close); documented in `TxlIO.h`. Group masks are doc-sized (extends the existing pixel-vs-non-pixel mask-dim branch — pixel masks are layer-sized, adjustment + group masks are doc-sized). v1–v4 still load with explicit version constants and gating flags (`hasOriginFields`, `acceptsAdjustmentKinds`, `hasClipByte`, `acceptsGroupKinds`). The reader maintains a `std::vector<GroupLayer*> groupStack` (empty = root); CloseGroup with an empty stack and EOF with a non-empty stack are both errors. The flat-with-section-dividers approach matches PSD §5.1.1 so a future PSD reader can reuse the same parse-stack pattern.
 - **UI wiring.** `File → Open…` dispatches on extension (`.txl` → `loadTxl`, `.png` → `loadPng`); `File → Save As…` (Ctrl+Shift+S) writes `.txl` unconditionally (adds the extension if the user omits it). PNG export stays on its own menu entry — Save As is the native-format path, Export As PNG is the lossy-flatten path.
 
 ---
