@@ -138,3 +138,52 @@ Append-only. Never rewrite history. Dated entries in ISO-8601.
   2 new cases in `test_txl_io`: v4 round-trip of mixed
   clipped/unclipped layers, hand-crafted v3 file loads with
   `clipToBelow == false`. Headless smoke test green.
+
+### M4-S2 — Properties dock + Levels port
+
+- New `src/ui/PropertiesDock.{h,cpp}` — `QDockWidget` parked on
+  `Qt::RightDockWidgetArea`, default tab-stacked under
+  `LayersPanel` via `tabifyDockWidget(layersPanel_,
+  propertiesDock_)`. Owns a `QStackedWidget` with two pages: an
+  empty-state QLabel ("Select an adjustment layer to edit its
+  properties.") and the Levels pane. API: `bindLevels(layer,
+  hist)` and `bindNothing()`. Re-emits `previewChanged` and
+  `levelsCommitRequested(layer, before, after)`.
+- New `src/ui/PropertiesPaneLevels.{h,cpp}` — bare `QWidget`
+  (Q_OBJECT) with the channel combo + 5 slider+spinbox pairs +
+  histogram backdrop, lifted from the deleted `LevelsDialog`. The
+  histogram view (`LevelsHistogramView`) is also lifted into the
+  pane's .cpp as a private class. **Snapshot/commit discipline:**
+  `paramsBefore_` snapshot taken on `bind()` AND on each
+  `QSlider::sliderPressed`; `valueChanged` mutates the layer +
+  emits `previewChanged`; `sliderReleased` checks for diff and
+  emits `commitRequested(layer, before, after)` if anything
+  changed, then re-snapshots so the next drag's `before` is
+  correct. Spin-box keyboard edits use `editingFinished` for the
+  same diff/commit. Channel combo switch reloads widgets +
+  re-snapshots (no commit emitted).
+- Deleted `src/ui/LevelsDialog.{h,cpp}` (and CMakeLists entry).
+- MainWindow refactor: new `propertiesDock_` field instantiated in
+  `buildDocks()`. `LayersPanel::editAdjustmentRequested(levels)`
+  now binds the dock + raises (no modal); the existing modal
+  branches for Curves/H-S/B&C stay until S3/S4. New helper
+  `bindActiveAdjustmentToDock()` dispatches on layer kind
+  (Levels → bind; non-adjustment or kind not yet ported → empty
+  state). Wired to `LayersPanel::activeLayerChanged` so the
+  active-layer selection in the panel updates the dock.
+  `onLayerAddLevels` no longer pops a dialog — inserts identity
+  layer, pushes `LayerOpCommand` immediately, binds dock + raises.
+  The "Cancel removes the layer" semantic from M3 becomes "Ctrl+Z
+  removes the layer" (non-modal default).
+- New helper `MainWindow::histogramBelow(LayerBase*)` extracted
+  from the visibility-stash pattern that was inlined in the
+  pre-S2 `onEditAdjustmentRequested`. Other adjustment branches
+  (Curves/H-S/B&C) still inline the same pattern; will refactor
+  to use the helper when their dock panes land in S3/S4.
+- 292 tests across 31 executables (was 285/30). 7 new cases in
+  `test_properties_pane_levels`: default state unbound, bind takes
+  snapshot, drag/release emits one commit (multiple in-drag value
+  changes still = one commit), release without change emits
+  nothing, second drag's `before` equals first drag's `after`,
+  unbind clears layer pointer, previewChanged fires during drag.
+  Headless smoke test green.

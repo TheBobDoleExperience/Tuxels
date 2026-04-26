@@ -1,7 +1,6 @@
-#include "ui/LevelsDialog.h"
+#include "ui/PropertiesPaneLevels.h"
 
 #include <QComboBox>
-#include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -10,20 +9,24 @@
 #include <QPainter>
 #include <QSlider>
 #include <QVBoxLayout>
-#include <QWidget>
 #include <algorithm>
+#include <cmath>
 
 namespace tuxels {
 
-// Lightweight bucket-bar histogram. One channel at a time (cheaper to draw
-// and matches the dialog's combo selection). The widget owns a reference to
-// the full 4×256 snapshot; `setChannel` just re-picks which row to render.
+// Lightweight histogram backdrop. One channel at a time, picked by the
+// pane's channel combo. Lifted from LevelsDialog.cpp so the pane is
+// self-contained.
 class LevelsHistogramView : public QWidget {
  public:
-  LevelsHistogramView(Histogram4x256 hist, QWidget* parent = nullptr)
-      : QWidget(parent), hist_(hist) {
+  explicit LevelsHistogramView(QWidget* parent = nullptr) : QWidget(parent) {
     setMinimumSize(256, 96);
     setAutoFillBackground(true);
+  }
+
+  void setData(Histogram4x256 hist) {
+    hist_ = hist;
+    update();
   }
 
   void setChannel(int ch) {
@@ -38,9 +41,6 @@ class LevelsHistogramView : public QWidget {
     p.fillRect(rect(), QColor(28, 28, 32));
     if (hist_.total == 0) return;
 
-    // Luma row (index 3) is what the composite selector paints; R/G/B pick
-    // their own channel. Map our LevelsChannel ordinal onto histogram rows:
-    // Composite(0) → luma(3); R(1)→R(0); G(2)→G(1); B(3)→B(2).
     static const int kMap[4] = {3, 0, 1, 2};
     const int row = kMap[channel_];
 
@@ -67,14 +67,12 @@ class LevelsHistogramView : public QWidget {
   }
 
  private:
-  Histogram4x256 hist_;
+  Histogram4x256 hist_{};
   int channel_ = 0;
 };
 
 namespace {
 
-// Sliders carry integer positions; spin boxes carry the floats. We pick 1000
-// steps for black/white/output (0..1 range) and 1000 steps for gamma (0.1..9.99).
 constexpr int kSliderSteps = 1000;
 
 int floatToSlider01(float v) {
@@ -95,13 +93,10 @@ float sliderToGamma(int s) {
 
 }  // namespace
 
-LevelsDialog::LevelsDialog(LevelsAdjustment* layer, Histogram4x256 hist,
-                           QWidget* parent)
-    : QDialog(parent), layer_(layer), before_(layer->allParams()) {
-  setWindowTitle(tr("Levels"));
-  setModal(true);
-
+PropertiesPaneLevels::PropertiesPaneLevels(QWidget* parent) : QWidget(parent) {
   auto* layout = new QVBoxLayout(this);
+  layout->setContentsMargins(8, 8, 8, 8);
+  layout->setSpacing(6);
 
   channelCombo_ = new QComboBox(this);
   channelCombo_->addItem(tr("Composite"));
@@ -110,7 +105,7 @@ LevelsDialog::LevelsDialog(LevelsAdjustment* layer, Histogram4x256 hist,
   channelCombo_->addItem(tr("Blue"));
   layout->addWidget(channelCombo_);
 
-  hist_ = new LevelsHistogramView(hist, this);
+  hist_ = new LevelsHistogramView(this);
   layout->addWidget(hist_);
 
   auto* inputBox = new QGroupBox(tr("Input"), this);
@@ -175,41 +170,86 @@ LevelsDialog::LevelsDialog(LevelsAdjustment* layer, Histogram4x256 hist,
   outputForm->addRow(tr("White"), outWhiteRow);
 
   layout->addWidget(outputBox);
+  layout->addStretch(1);
 
-  auto* buttons = new QDialogButtonBox(
-      QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
-  connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
-  connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-  layout->addWidget(buttons);
+  // Wire all sliders + spin boxes. Drag-detection: sliderPressed snapshots,
+  // sliderReleased commits if changed.
+  for (auto* s : {inBlackSlider_, gammaSlider_, inWhiteSlider_,
+                  outBlackSlider_, outWhiteSlider_}) {
+    connect(s, &QSlider::sliderPressed, this,
+            &PropertiesPaneLevels::onSliderPressed);
+    connect(s, &QSlider::sliderReleased, this,
+            &PropertiesPaneLevels::onSliderReleased);
+  }
+  // Spin boxes don't fire sliderPressed/Released; treat each
+  // editingFinished as a commit (snapshot taken at the most recent bind /
+  // commit).
+  for (auto* sp : {inBlackSpin_, gammaSpin_, inWhiteSpin_, outBlackSpin_,
+                   outWhiteSpin_}) {
+    connect(sp, &QDoubleSpinBox::editingFinished, this,
+            &PropertiesPaneLevels::onSpinEditingFinished);
+  }
 
   connect(channelCombo_,
           QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-          &LevelsDialog::onChannelChanged);
+          &PropertiesPaneLevels::onChannelChanged);
   connect(inBlackSlider_, &QSlider::valueChanged, this,
-          &LevelsDialog::onInBlackChanged);
+          &PropertiesPaneLevels::onInBlackChanged);
   connect(inBlackSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-          this, &LevelsDialog::onInBlackChanged);
+          this, &PropertiesPaneLevels::onInBlackChanged);
   connect(gammaSlider_, &QSlider::valueChanged, this,
-          &LevelsDialog::onGammaChanged);
+          &PropertiesPaneLevels::onGammaChanged);
   connect(gammaSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-          this, &LevelsDialog::onGammaChanged);
+          this, &PropertiesPaneLevels::onGammaChanged);
   connect(inWhiteSlider_, &QSlider::valueChanged, this,
-          &LevelsDialog::onInWhiteChanged);
+          &PropertiesPaneLevels::onInWhiteChanged);
   connect(inWhiteSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-          this, &LevelsDialog::onInWhiteChanged);
+          this, &PropertiesPaneLevels::onInWhiteChanged);
   connect(outBlackSlider_, &QSlider::valueChanged, this,
-          &LevelsDialog::onOutBlackChanged);
+          &PropertiesPaneLevels::onOutBlackChanged);
   connect(outBlackSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-          this, &LevelsDialog::onOutBlackChanged);
+          this, &PropertiesPaneLevels::onOutBlackChanged);
   connect(outWhiteSlider_, &QSlider::valueChanged, this,
-          &LevelsDialog::onOutWhiteChanged);
+          &PropertiesPaneLevels::onOutWhiteChanged);
   connect(outWhiteSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-          this, &LevelsDialog::onOutWhiteChanged);
+          this, &PropertiesPaneLevels::onOutWhiteChanged);
+}
 
+void PropertiesPaneLevels::bind(LevelsAdjustment* layer, Histogram4x256 hist) {
+  layer_ = layer;
+  hist_->setData(hist);
+  if (!layer_) return;
+  snapshotBefore();
   loadChannelIntoWidgets(LevelsChannel::Composite);
 }
 
-void LevelsDialog::loadChannelIntoWidgets(LevelsChannel ch) {
+void PropertiesPaneLevels::unbind() {
+  layer_ = nullptr;
+  hist_->setData(Histogram4x256{});
+}
+
+void PropertiesPaneLevels::snapshotBefore() {
+  if (!layer_) return;
+  paramsBefore_ = layer_->allParams();
+}
+
+bool PropertiesPaneLevels::paramsDifferFromBefore() const {
+  if (!layer_) return false;
+  const auto& cur = layer_->allParams();
+  for (std::size_t i = 0; i < cur.size(); ++i) {
+    const auto& a = cur[i];
+    const auto& b = paramsBefore_[i];
+    if (a.inBlack != b.inBlack || a.inWhite != b.inWhite ||
+        a.gamma != b.gamma || a.outBlack != b.outBlack ||
+        a.outWhite != b.outWhite) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void PropertiesPaneLevels::loadChannelIntoWidgets(LevelsChannel ch) {
+  if (!layer_) return;
   loading_ = true;
   activeChannel_ = ch;
   const LevelsParams& p = layer_->params(ch);
@@ -227,27 +267,60 @@ void LevelsDialog::loadChannelIntoWidgets(LevelsChannel ch) {
   loading_ = false;
 }
 
-void LevelsDialog::pushParamsFromWidgets() {
-  if (loading_) return;
+void PropertiesPaneLevels::pushParamsFromWidgets() {
+  if (loading_ || !layer_) return;
   LevelsParams p;
   p.inBlack = static_cast<float>(inBlackSpin_->value());
   p.inWhite = static_cast<float>(inWhiteSpin_->value());
   p.gamma = static_cast<float>(gammaSpin_->value());
   p.outBlack = static_cast<float>(outBlackSpin_->value());
   p.outWhite = static_cast<float>(outWhiteSpin_->value());
-  // Prevent degenerate input range (inWhite must stay strictly greater than
-  // inBlack). Nudge inWhite above inBlack silently rather than surfacing a
-  // validator error — matches how PS handles the crossing slider case.
   if (p.inWhite <= p.inBlack) p.inWhite = std::min(1.f, p.inBlack + 1e-3f);
   layer_->setParams(activeChannel_, p);
   emit previewChanged();
 }
 
-void LevelsDialog::onChannelChanged(int idx) {
-  loadChannelIntoWidgets(static_cast<LevelsChannel>(idx));
+void PropertiesPaneLevels::simulateSliderPressForTest() { onSliderPressed(); }
+void PropertiesPaneLevels::simulateSliderReleaseForTest() {
+  onSliderReleased();
 }
 
-void LevelsDialog::onInBlackChanged() {
+void PropertiesPaneLevels::onSliderPressed() {
+  // A drag is starting; snapshot the current layer params so the eventual
+  // commit-on-release uses the right `before`.
+  if (!layer_) return;
+  dragging_ = true;
+  snapshotBefore();
+}
+
+void PropertiesPaneLevels::onSliderReleased() {
+  if (!layer_) return;
+  dragging_ = false;
+  if (paramsDifferFromBefore()) {
+    emit commitRequested(layer_, paramsBefore_, layer_->allParams());
+    snapshotBefore();
+  }
+}
+
+void PropertiesPaneLevels::onSpinEditingFinished() {
+  // For keyboard edits — no slider press/release brackets the change. Treat
+  // each editingFinished as one commit.
+  if (!layer_) return;
+  if (paramsDifferFromBefore()) {
+    emit commitRequested(layer_, paramsBefore_, layer_->allParams());
+    snapshotBefore();
+  }
+}
+
+void PropertiesPaneLevels::onChannelChanged(int idx) {
+  // Channel switch is not an edit — just reload widgets to reflect the new
+  // channel's params. snapshotBefore so the next edit's `before` matches
+  // the on-load state.
+  loadChannelIntoWidgets(static_cast<LevelsChannel>(idx));
+  snapshotBefore();
+}
+
+void PropertiesPaneLevels::onInBlackChanged() {
   if (loading_) return;
   if (sender() == inBlackSlider_) {
     loading_ = true;
@@ -262,7 +335,7 @@ void LevelsDialog::onInBlackChanged() {
   pushParamsFromWidgets();
 }
 
-void LevelsDialog::onInWhiteChanged() {
+void PropertiesPaneLevels::onInWhiteChanged() {
   if (loading_) return;
   if (sender() == inWhiteSlider_) {
     loading_ = true;
@@ -277,7 +350,7 @@ void LevelsDialog::onInWhiteChanged() {
   pushParamsFromWidgets();
 }
 
-void LevelsDialog::onGammaChanged() {
+void PropertiesPaneLevels::onGammaChanged() {
   if (loading_) return;
   if (sender() == gammaSlider_) {
     loading_ = true;
@@ -292,7 +365,7 @@ void LevelsDialog::onGammaChanged() {
   pushParamsFromWidgets();
 }
 
-void LevelsDialog::onOutBlackChanged() {
+void PropertiesPaneLevels::onOutBlackChanged() {
   if (loading_) return;
   if (sender() == outBlackSlider_) {
     loading_ = true;
@@ -307,7 +380,7 @@ void LevelsDialog::onOutBlackChanged() {
   pushParamsFromWidgets();
 }
 
-void LevelsDialog::onOutWhiteChanged() {
+void PropertiesPaneLevels::onOutWhiteChanged() {
   if (loading_) return;
   if (sender() == outWhiteSlider_) {
     loading_ = true;
@@ -320,14 +393,6 @@ void LevelsDialog::onOutWhiteChanged() {
     loading_ = false;
   }
   pushParamsFromWidgets();
-}
-
-void LevelsDialog::reject() {
-  // Cancel: restore the params snapshotted at open so the live-preview
-  // edits don't leak onto the layer. The caller sees a no-op.
-  layer_->setAllParams(before_);
-  emit previewChanged();
-  QDialog::reject();
 }
 
 }  // namespace tuxels

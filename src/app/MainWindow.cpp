@@ -46,7 +46,7 @@
 #include "ui/CurvesDialog.h"
 #include "ui/HueSatDialog.h"
 #include "ui/LayersPanel.h"
-#include "ui/LevelsDialog.h"
+#include "ui/PropertiesDock.h"
 #include "ui/ToolsPanel.h"
 
 namespace tuxels {
@@ -341,6 +341,31 @@ void MainWindow::buildDocks() {
           &MainWindow::onEditAdjustmentRequested);
   connect(layersPanel_, &LayersPanel::toggleClipToBelowRequested, this,
           &MainWindow::onLayerToggleClipToBelow);
+
+  // Properties dock — non-modal editor for adjustment-layer params (M4-S2).
+  // Tab-stacked under LayersPanel by default; users can drag-detach.
+  propertiesDock_ = new PropertiesDock(this);
+  addDockWidget(Qt::RightDockWidgetArea, propertiesDock_);
+  tabifyDockWidget(layersPanel_, propertiesDock_);
+  layersPanel_->raise();  // Layers shows on top by default; user clicks the
+                          // Properties tab (or an adjustment-layer thumb)
+                          // to bring it forward.
+  connect(propertiesDock_, &PropertiesDock::previewChanged, this,
+          [this]() { if (canvas_) canvas_->requestRecomposite(); });
+  connect(propertiesDock_, &PropertiesDock::levelsCommitRequested, this,
+          [this](LevelsAdjustment* layer,
+                 std::array<LevelsParams, 4> before,
+                 std::array<LevelsParams, 4> after) {
+            if (!layer) return;
+            using ParamArr = std::array<LevelsParams, 4>;
+            auto setter = [](LevelsAdjustment* l, const ParamArr& p) {
+              l->setAllParams(p);
+            };
+            undoStack_->push(
+                std::make_unique<LayerParamsCommand<LevelsAdjustment, ParamArr>>(
+                    layer, before, after, setter, "Edit Levels"));
+            if (canvas_) canvas_->requestRecomposite();
+          });
 }
 
 void MainWindow::setDocument(std::unique_ptr<Document> doc) {
@@ -688,7 +713,11 @@ void MainWindow::onLayerPanelMutated() {
 }
 
 void MainWindow::onActiveLayerChanged() {
-  // Placeholder for future painting-target updates.
+  // M4-S2: when the active layer is an adjustment with a Properties pane,
+  // load it into the dock automatically. Other kinds (or non-adjustments)
+  // leave the dock at its empty state — explicit fx-thumb click on a
+  // dialog-only adjustment kind still opens the modal.
+  bindActiveAdjustmentToDock();
 }
 
 void MainWindow::onLayerPainted() {
@@ -1036,12 +1065,49 @@ void MainWindow::onLayerDeleteMaskRequest(LayerBase* layer) {
                                                     std::move(undoIt)));
 }
 
+Histogram4x256 MainWindow::histogramBelow(LayerBase* layer) {
+  if (!doc_ || !layer) return Histogram4x256{};
+  std::vector<bool> saved;
+  saved.reserve(doc_->tree().size());
+  bool pastLayer = false;
+  for (std::size_t i = 0; i < doc_->tree().size(); ++i) {
+    LayerBase* l = doc_->tree().at(i);
+    saved.push_back(l->visible);
+    if (l == layer) pastLayer = true;
+    if (pastLayer) l->visible = false;
+  }
+  TuxImage preview(doc_->width(), doc_->height());
+  compose(doc_->tree(), preview);
+  for (std::size_t i = 0; i < doc_->tree().size(); ++i) {
+    doc_->tree().at(i)->visible = saved[i];
+  }
+  return computeHistogram(preview, doc_->selection());
+}
+
+void MainWindow::bindActiveAdjustmentToDock() {
+  if (!propertiesDock_ || !doc_) return;
+  const int idx = doc_->activeLayerIndex();
+  if (idx < 0 || idx >= static_cast<int>(doc_->tree().size())) {
+    propertiesDock_->bindNothing();
+    return;
+  }
+  LayerBase* layer = doc_->tree().at(static_cast<std::size_t>(idx));
+  if (auto* levels = dynamic_cast<LevelsAdjustment*>(layer)) {
+    propertiesDock_->bindLevels(levels, histogramBelow(levels));
+    return;
+  }
+  // Other adjustment kinds (Curves/H-S/B&C) get their dock panes in
+  // S3/S4. Until then, leave the dock at empty state for those — the
+  // existing modal dialogs still open via `editAdjustmentRequested`.
+  propertiesDock_->bindNothing();
+}
+
 void MainWindow::onLayerAddLevels() {
   if (!doc_) return;
 
-  // Compose the current doc into a temp image so the dialog can render a
-  // histogram of "what's about to be adjusted". Matches PS: the backdrop
-  // reflects the composite below the new adjustment's insert position.
+  // Histogram of the composite below the new adjustment's insert position.
+  // Compute BEFORE adding the layer so the histogram reflects "what's
+  // about to be adjusted" — matches PS.
   TuxImage preview(doc_->width(), doc_->height());
   compose(doc_->tree(), preview);
   Histogram4x256 hist = computeHistogram(preview, doc_->selection());
@@ -1051,49 +1117,39 @@ void MainWindow::onLayerAddLevels() {
   const PaintTarget prevPaintTarget = doc_->paintTarget();
   const int prevActive = doc_->activeLayerIndex();
 
-  // Insert with identity params so live preview has something to act on.
+  // Insert with identity params; bind the dock so the user can adjust
+  // immediately. No more modal Cancel — Ctrl+Z removes the layer if the
+  // user changes their mind.
   LevelsAdjustment* raw = doc_->addAdjustmentLayer(std::move(layer));
   layersPanel_->refresh();
   canvas_->requestRecomposite();
 
-  LevelsDialog dlg(raw, hist, this);
-  connect(&dlg, &LevelsDialog::previewChanged, this,
-          [this]() { canvas_->requestRecomposite(); });
+  const std::size_t idx = doc_->tree().size() - 1;
+  auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
+      doc_->tree().removeAt(idx));
 
-  if (dlg.exec() == QDialog::Accepted) {
-    // Pop the configured layer out of the tree, stash it, and push a
-    // LayerOpCommand whose doIt re-inserts it. Mirrors `onLayerAdd` so
-    // undo/redo share the add/remove closures.
-    const std::size_t idx = doc_->tree().size() - 1;
-    auto stash = std::make_shared<std::unique_ptr<LayerBase>>(
-        doc_->tree().removeAt(idx));
-    const int priorActive = prevActive;
-
-    auto doIt = [this, stash, idx]() mutable {
-      if (!*stash) return;
-      doc_->tree().insertAt(idx, std::move(*stash));
-      doc_->setActiveLayerIndex(static_cast<int>(idx));
-      doc_->setPaintTarget(PaintTarget::Mask);
-      refreshAfterUndoRedo();
-    };
-    auto undoIt = [this, stash, idx, priorActive, prevPaintTarget]() mutable {
-      *stash = doc_->tree().removeAt(idx);
-      doc_->setActiveLayerIndex(priorActive);
-      doc_->setPaintTarget(prevPaintTarget);
-      refreshAfterUndoRedo();
-    };
-
-    doIt();
-    undoStack_->push(std::make_unique<LayerOpCommand>(
-        "Add Levels Adjustment", std::move(doIt), std::move(undoIt)));
-  } else {
-    // Cancel: remove the layer, restore prior active index and paint target.
-    doc_->tree().removeAt(doc_->tree().size() - 1);
+  auto doIt = [this, stash, idx]() mutable {
+    if (!*stash) return;
+    doc_->tree().insertAt(idx, std::move(*stash));
+    doc_->setActiveLayerIndex(static_cast<int>(idx));
+    doc_->setPaintTarget(PaintTarget::Mask);
+    refreshAfterUndoRedo();
+    bindActiveAdjustmentToDock();
+  };
+  auto undoIt = [this, stash, idx, prevActive, prevPaintTarget]() mutable {
+    *stash = doc_->tree().removeAt(idx);
     doc_->setActiveLayerIndex(prevActive);
     doc_->setPaintTarget(prevPaintTarget);
-    layersPanel_->refresh();
-    canvas_->requestRecomposite();
-  }
+    refreshAfterUndoRedo();
+    bindActiveAdjustmentToDock();
+  };
+
+  doIt();
+  // raw is back in the tree after doIt(); push the command + bind dock.
+  undoStack_->push(std::make_unique<LayerOpCommand>(
+      "Add Levels Adjustment", std::move(doIt), std::move(undoIt)));
+  propertiesDock_->bindLevels(raw, hist);
+  propertiesDock_->raise();
 }
 
 void MainWindow::onLayerAddCurves() {
@@ -1268,21 +1324,11 @@ void MainWindow::onEditAdjustmentRequested(LayerBase* layer) {
   Histogram4x256 hist = computeHistogram(preview, doc_->selection());
 
   if (auto* levels = dynamic_cast<LevelsAdjustment*>(layer)) {
-    using ParamArr = std::array<LevelsParams, 4>;
-    LevelsDialog dlg(levels, hist, this);
-    const ParamArr before = dlg.paramsBefore();
-    connect(&dlg, &LevelsDialog::previewChanged, this,
-            [this]() { canvas_->requestRecomposite(); });
-    if (dlg.exec() == QDialog::Accepted) {
-      const ParamArr after = levels->allParams();
-      auto setter = [](LevelsAdjustment* l, const ParamArr& p) {
-        l->setAllParams(p);
-      };
-      undoStack_->push(
-          std::make_unique<LayerParamsCommand<LevelsAdjustment, ParamArr>>(
-              levels, before, after, setter, "Edit Levels"));
-      canvas_->requestRecomposite();
-    }
+    // Properties dock takes the modal's place (M4-S2). bindLevels triggers
+    // a snapshotBefore inside the pane, so the next slider release will
+    // commit a `LayerParamsCommand` against the on-bind state.
+    propertiesDock_->bindLevels(levels, hist);
+    propertiesDock_->raise();
     return;
   }
 

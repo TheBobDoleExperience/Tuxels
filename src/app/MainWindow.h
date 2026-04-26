@@ -5,6 +5,7 @@
 
 #include "compositor/BlendMode.h"
 #include "core/Document.h"
+#include "core/Histogram.h"
 #include "tools/ToolId.h"
 
 namespace tuxels {
@@ -16,10 +17,12 @@ class CropTool;
 class LassoTool;
 class LayerBase;
 class LayersPanel;
+class LevelsAdjustment;
 class MagicWandTool;
 class MarqueeTool;
 class MoveTool;
 class PolyLassoTool;
+class PropertiesDock;
 class SelectByColorTool;
 class ToolsPanel;
 class TransformTool;
@@ -84,6 +87,15 @@ class MainWindow : public QMainWindow {
   // identity. Returns true iff a command was pushed.
   bool commitTransformIfActive();
 
+  // Compose the document with `layer` and everything above it hidden, then
+  // compute a histogram of the result clipped to the active selection.
+  // Used by Properties-dock binds + the Levels/Curves modal "open existing"
+  // path for the histogram backdrop.
+  Histogram4x256 histogramBelow(LayerBase* layer);
+  // If the active layer is an adjustment with a Properties pane, bind the
+  // dock to it. Else show the empty state.
+  void bindActiveAdjustmentToDock();
+
   std::unique_ptr<Document> doc_;
   std::unique_ptr<BrushTool> brushTool_;
   std::unique_ptr<MarqueeTool> marqueeTool_;
@@ -99,6 +111,7 @@ class MainWindow : public QMainWindow {
   CanvasView* canvas_ = nullptr;
   LayersPanel* layersPanel_ = nullptr;
   ToolsPanel* toolsPanel_ = nullptr;
+  PropertiesDock* propertiesDock_ = nullptr;
   ToolId activeToolId_ = ToolId::Brush;
 };
 

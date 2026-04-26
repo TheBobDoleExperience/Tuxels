@@ -77,8 +77,10 @@ add_executable(tuxels
   src/ui/CurvesDialog.cpp
   src/ui/HueSatDialog.h
   src/ui/HueSatDialog.cpp
-  src/ui/LevelsDialog.h
-  src/ui/LevelsDialog.cpp
+  src/ui/PropertiesDock.h
+  src/ui/PropertiesDock.cpp
+  src/ui/PropertiesPaneLevels.h
+  src/ui/PropertiesPaneLevels.cpp
   src/ui/ToolsPanel.h
   src/ui/ToolsPanel.cpp
   resources/tuxels.qrc
@@ -162,4 +164,8 @@ tuxels_add_qt_test(test_tools_panel
   src/ui/CollapsibleSection.cpp
   src/ui/ToolsPanel.h
   src/ui/ToolsPanel.cpp
+)
+tuxels_add_qt_test(test_properties_pane_levels
+  src/ui/PropertiesPaneLevels.h
+  src/ui/PropertiesPaneLevels.cpp
 )
