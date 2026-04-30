@@ -25,7 +25,11 @@ class BrushTool : public ToolBase {
   void release(Document& doc, float x, float y, MouseButton btn) override;
   Rect takeDirtyRect() override;
   std::optional<float> cursorRadiusPx() const override {
-    return brush_.diameter() * 0.5f;
+    // M11-S0: shrink the cursor ring to match the actual stamp footprint
+    // when stylus pressure is < 1. Mouse + tablet-at-full-pressure paths
+    // stay at the brush's nominal diameter (pressure() defaults 1.0).
+    const float p = pressure();
+    return brush_.diameter() * 0.5f * (p < 1.f ? p : 1.f);
   }
 
   struct StrokeInfo {
