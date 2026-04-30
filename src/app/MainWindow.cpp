@@ -27,6 +27,7 @@
 #include "io/PngIO.h"
 #include "io/TxlIO.h"
 #include "layers/BrightnessContrast.h"
+#include "layers/CloneLayer.h"
 #include "layers/CurvesAdjustment.h"
 #include "layers/GroupLayer.h"
 #include "layers/HueSaturation.h"
@@ -140,6 +141,14 @@ void MainWindow::buildMenus() {
 
   auto* delLayerAct = layerMenu->addAction(tr("&Delete Layer"));
   connect(delLayerAct, &QAction::triggered, this, &MainWindow::onLayerDelete);
+
+  // M7-S4: PS-style Ctrl+J duplicates the active layer. Pixel + group +
+  // adjustment kinds all clone via `cloneLayer`. The new layer lands at
+  // (active's parent, active's idx + 1) — directly above active in panel.
+  auto* dupLayerAct = layerMenu->addAction(tr("Duplicate &Layer"));
+  dupLayerAct->setShortcut(QKeySequence(tr("Ctrl+J")));
+  connect(dupLayerAct, &QAction::triggered, this,
+          &MainWindow::onLayerDuplicate);
 
   layerMenu->addSeparator();
   // Group / Ungroup (M5-S4). Enabled state tracks the active layer:
@@ -1318,6 +1327,57 @@ void MainWindow::onLayerDelete() {
   undoStack_->push(std::make_unique<LayerOpCommand>("Delete Layer",
                                                     std::move(doIt),
                                                     std::move(undoIt)));
+}
+
+void MainWindow::onLayerDuplicate() {
+  if (!doc_ || !undoStack_) return;
+  LayerBase* active = doc_->activeLayer();
+  if (!active) return;
+  auto loc = doc_->tree().locate(active->id);
+  if (!loc) return;
+
+  auto cloned = cloneLayer(*active, *doc_);
+  if (!cloned) {
+    statusBar()->showMessage(
+        tr("Cannot duplicate this layer kind."), 1500);
+    return;
+  }
+  const LayerId newId = cloned->id;
+  const LayerId parentId = loc->parent ? loc->parent->id : 0;
+  const std::size_t insertIdx = loc->index + 1;
+
+  // Stash the cloned layer so the closure pair can apply/undo it. The
+  // shared_ptr<unique_ptr<>> trick mirrors the pattern used by onLayerAdd /
+  // onLayerDelete.
+  auto stash = std::make_shared<std::unique_ptr<LayerBase>>(std::move(cloned));
+  const LayerId prevActiveId = doc_->activeLayerId();
+
+  auto resolveParent = [this](LayerId pid) -> GroupLayer* {
+    if (pid == 0) return nullptr;
+    return dynamic_cast<GroupLayer*>(doc_->tree().findById(pid));
+  };
+
+  auto doIt = [this, stash, parentId, insertIdx, newId, resolveParent]() mutable {
+    if (!*stash) return;
+    doc_->tree().insertAtPath(resolveParent(parentId), insertIdx,
+                                std::move(*stash));
+    doc_->setActiveLayerId(newId);
+    doc_->setSelectedLayerIds({newId});
+    refreshAfterUndoRedo();
+  };
+  auto undoIt = [this, stash, parentId, insertIdx, prevActiveId,
+                 resolveParent]() mutable {
+    *stash = doc_->tree().removeFromPath(resolveParent(parentId), insertIdx);
+    doc_->setActiveLayerId(prevActiveId);
+    doc_->setSelectedLayerIds(prevActiveId == 0
+                                  ? std::vector<LayerId>{}
+                                  : std::vector<LayerId>{prevActiveId});
+    refreshAfterUndoRedo();
+  };
+
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>(
+      "Duplicate Layer", std::move(doIt), std::move(undoIt)));
 }
 
 void MainWindow::onLayerMoveUp() {
