@@ -26,6 +26,7 @@
 #include "history/TransformCommand.h"
 #include "history/UndoStack.h"
 #include "io/PngIO.h"
+#include "io/PsdIO.h"
 #include "io/TxlIO.h"
 #include "layers/BrightnessContrast.h"
 #include "layers/CloneLayer.h"
@@ -698,7 +699,8 @@ void MainWindow::onFileNew() {
 void MainWindow::onFileOpen() {
   const QString path = QFileDialog::getOpenFileName(
       this, tr("Open"), QString(),
-      tr("Tuxels or PNG (*.txl *.png);;Tuxels Document (*.txl);;PNG Images (*.png)"));
+      tr("Tuxels / PSD / PNG (*.txl *.psd *.png);;Tuxels Document "
+         "(*.txl);;Photoshop Document (*.psd);;PNG Images (*.png)"));
   if (path.isEmpty()) return;
 
   const QString suffix = QFileInfo(path).suffix().toLower();
@@ -716,6 +718,22 @@ void MainWindow::onFileOpen() {
     canvas_->requestRecomposite();
     canvas_->refreshSelectionOverlay();
     statusBar()->showMessage(tr("Opened %1").arg(path), 3000);
+    return;
+  }
+  if (suffix == "psd") {
+    std::string err;
+    auto loaded = loadPsd(path.toStdString(), &err);
+    if (!loaded) {
+      QMessageBox::warning(this, tr("Open Failed"),
+                           tr("Could not open %1:\n%2")
+                               .arg(path, QString::fromStdString(err)));
+      return;
+    }
+    setDocument(std::move(*loaded));
+    layersPanel_->refresh();
+    canvas_->requestRecomposite();
+    canvas_->refreshSelectionOverlay();
+    statusBar()->showMessage(tr("Opened %1 (PSD import)").arg(path), 3000);
     return;
   }
 

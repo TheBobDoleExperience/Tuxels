@@ -40,6 +40,7 @@ set(TUXELS_CORE_SOURCES
   src/history/CropCommand.cpp
   src/history/MoveLayerCommand.cpp
   src/history/TransformCommand.cpp
+  src/io/PsdIO.cpp
   src/io/TxlIO.cpp
   src/tools/BrushTool.cpp
   src/tools/BucketTool.cpp
@@ -148,6 +149,7 @@ tuxels_add_test(test_clip_to_below)
 tuxels_add_test(test_layer_dnd)
 tuxels_add_test(test_multi_select)
 tuxels_add_test(test_clone_layer)
+tuxels_add_test(test_psd_io)
 
 add_executable(test_png_io tests/test_png_io.cpp)
 set_target_properties(test_png_io PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
