@@ -9,6 +9,8 @@
 #include <QListWidgetItem>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPen>
 #include <QStyle>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -99,12 +101,39 @@ class LayerListWidget : public QListWidget {
   void dragMoveEvent(QDragMoveEvent* event) override {
     if (event->mimeData()->hasFormat(kLayerIdMime) && event->source() == this) {
       event->acceptProposedAction();
+      // M7-S2: track the drop zone under the cursor so paintEvent can
+      // render our custom indicator (Qt's default doesn't distinguish
+      // "drop INTO group" from "drop above/below row").
+      QListWidgetItem* prevItem = hoverItem_;
+      const DropZone prevZone = hoverZone_;
+      hoverItem_ = nullptr;
+      const QPoint pos = event->position().toPoint();
+      if (auto* item = itemAt(pos)) {
+        if (auto* row = qobject_cast<LayerRowWidget*>(itemWidget(item))) {
+          (void)row;
+          hoverItem_ = item;
+          hoverZone_ = zoneAt(item, pos);
+        }
+      }
+      if (hoverItem_ != prevItem || hoverZone_ != prevZone) {
+        viewport()->update();
+      }
     } else {
       event->ignore();
     }
   }
 
+  void dragLeaveEvent(QDragLeaveEvent* event) override {
+    hoverItem_ = nullptr;
+    viewport()->update();
+    QListWidget::dragLeaveEvent(event);
+  }
+
   void dropEvent(QDropEvent* event) override {
+    // Clear hover state regardless of outcome so the indicator vanishes.
+    hoverItem_ = nullptr;
+    viewport()->update();
+
     if (!panel_ || event->source() != this ||
         !event->mimeData()->hasFormat(kLayerIdMime)) {
       event->ignore();
@@ -131,19 +160,7 @@ class LayerListWidget : public QListWidget {
           qobject_cast<LayerRowWidget*>(itemWidget(targetItem));
       if (targetRow) {
         targetLayer = targetRow->layer();
-        const QRect r = visualItemRect(targetItem);
-        const int y = pos.y() - r.top();
-        const int h = r.height() > 0 ? r.height() : 1;
-        // 3-zone hit-test. Wider middle on group rows so the "drop INTO"
-        // gesture is easier to land; non-group rows treat the middle as
-        // "below".
-        if (y < h / 4) {
-          zone = DropZone::Above;
-        } else if (y > 3 * h / 4) {
-          zone = DropZone::Below;
-        } else {
-          zone = DropZone::On;
-        }
+        zone = zoneAt(targetItem, pos);
       }
     }
     panel_->emitLayerDrop(movedId, targetLayer, zone);
@@ -153,7 +170,52 @@ class LayerListWidget : public QListWidget {
     // tree.
   }
 
+  void paintEvent(QPaintEvent* event) override {
+    QListWidget::paintEvent(event);
+    // M7-S2: overlay our custom drop indicator on top of the items.
+    if (!hoverItem_) return;
+    QPainter p(viewport());
+    const QRect r = visualItemRect(hoverItem_);
+    if (hoverZone_ == DropZone::On) {
+      auto* row = qobject_cast<LayerRowWidget*>(itemWidget(hoverItem_));
+      const bool targetIsGroup =
+          row && row->layer() && row->layer()->kind() == LayerKind::Group;
+      if (targetIsGroup) {
+        // Drop INTO group: tinted fill + thick border to make the action
+        // unambiguous.
+        p.fillRect(r, QColor(60, 120, 200, 70));
+        QPen pen(QColor(60, 120, 200, 230), 2);
+        p.setPen(pen);
+        p.drawRect(r.adjusted(1, 1, -1, -1));
+      } else {
+        // On non-group: same visual as Below (the dispatch will resolve
+        // it that way).
+        QPen pen(QColor(60, 200, 120, 230), 2);
+        p.setPen(pen);
+        p.drawLine(r.left(), r.bottom() - 1, r.right(), r.bottom() - 1);
+      }
+    } else if (hoverZone_ == DropZone::Above) {
+      QPen pen(QColor(60, 200, 120, 230), 2);
+      p.setPen(pen);
+      p.drawLine(r.left(), r.top(), r.right(), r.top());
+    } else {  // Below
+      QPen pen(QColor(60, 200, 120, 230), 2);
+      p.setPen(pen);
+      p.drawLine(r.left(), r.bottom() - 1, r.right(), r.bottom() - 1);
+    }
+  }
+
  private:
+  // Single hit-test source-of-truth for drag-move (hover) and drop.
+  DropZone zoneAt(QListWidgetItem* item, const QPoint& pos) const {
+    const QRect r = visualItemRect(item);
+    const int y = pos.y() - r.top();
+    const int h = r.height() > 0 ? r.height() : 1;
+    if (y < h / 4) return DropZone::Above;
+    if (y > 3 * h / 4) return DropZone::Below;
+    return DropZone::On;
+  }
+
   void startDragForItem(QListWidgetItem* item) {
     auto* row = qobject_cast<LayerRowWidget*>(itemWidget(item));
     if (!row || !row->layer()) return;
@@ -170,6 +232,9 @@ class LayerListWidget : public QListWidget {
   LayersPanel* panel_;
   QPoint pressPos_;
   QListWidgetItem* pressItem_ = nullptr;
+  // Drag-hover state for the M7-S2 custom indicator.
+  QListWidgetItem* hoverItem_ = nullptr;
+  DropZone hoverZone_ = DropZone::Below;
 };
 
 }  // namespace
