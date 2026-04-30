@@ -41,6 +41,11 @@ class LayerRowWidget : public QWidget {
   void setIndentDepth(int depth);
   int indentDepth() const { return indentDepth_; }
 
+  // M7-S6: external entry point for triggering the in-place rename from
+  // the context menu (or other paths). Same effect as a double-click on
+  // the name label.
+  void beginRename();
+
   // Test-only accessors.
   int blendItemCountForTesting() const;
   bool blendComboHasPassThroughForTesting() const {
@@ -78,6 +83,15 @@ class LayerRowWidget : public QWidget {
   // MainWindow can wrap the rename in a LayerOpCommand for undo.
   void nameChangeRequested(LayerBase* layer, std::string oldName,
                             std::string newName);
+  // M7-S6: right-click context-menu actions. The panel relays each to
+  // MainWindow which sets the row's layer active + reuses the existing
+  // global-action slot. `addLayerMaskRequested` is pixel-only at the
+  // emit site (the menu entry is only shown for PixelLayer rows).
+  void duplicateLayerRequested(LayerBase* layer);
+  void deleteLayerRequested(LayerBase* layer);
+  void groupLayerRequested(LayerBase* layer);
+  void addLayerMaskRequested(LayerBase* layer);
+  void renameLayerRequested(LayerBase* layer);
 
  protected:
   bool eventFilter(QObject* watched, QEvent* event) override;

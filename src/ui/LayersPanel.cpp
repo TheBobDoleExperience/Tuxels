@@ -360,6 +360,16 @@ void LayersPanel::refresh() {
             &LayersPanel::onGroupChevronToggled);
     connect(row, &LayerRowWidget::nameChangeRequested, this,
             &LayersPanel::nameChangeRequested);
+    connect(row, &LayerRowWidget::duplicateLayerRequested, this,
+            &LayersPanel::duplicateLayerRequested);
+    connect(row, &LayerRowWidget::deleteLayerRequested, this,
+            &LayersPanel::deleteLayerRequested);
+    connect(row, &LayerRowWidget::groupLayerRequested, this,
+            &LayersPanel::groupLayerRequested);
+    connect(row, &LayerRowWidget::addLayerMaskRequested, this,
+            &LayersPanel::addLayerMaskRequested);
+    connect(row, &LayerRowWidget::renameLayerRequested, this,
+            &LayersPanel::renameLayerRequested);
 
     auto* item = new QListWidgetItem();
     item->setSizeHint(row->sizeHint());
@@ -511,6 +521,15 @@ void LayersPanel::emitLayerDrop(LayerId movedId, LayerBase* target,
   if (fromParentId == toParentId && fromIdx + 1 == toIdx) return;
 
   emit layerDroppedRequested(movedId, toParentId, toIdx);
+}
+
+void LayersPanel::beginRenameForLayer(LayerId id) {
+  for (auto* row : rows_) {
+    if (row && row->layer() && row->layer()->id == id) {
+      row->beginRename();
+      return;
+    }
+  }
 }
 
 int LayersPanel::rowCountForTesting() const {

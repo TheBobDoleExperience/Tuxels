@@ -375,6 +375,53 @@ void MainWindow::buildDocks() {
           &MainWindow::onLayerToggleClipToBelow);
   connect(layersPanel_, &LayersPanel::nameChangeRequested, this,
           &MainWindow::onLayerNameChange);
+  // M7-S6: row context-menu actions. The panel hands us a specific layer
+  // (which may not be the currently-active one); set active to that layer
+  // first, then reuse the existing global-action slot. PS-style: a
+  // right-click also replaces the multi-selection set with the clicked
+  // row.
+  connect(layersPanel_, &LayersPanel::duplicateLayerRequested, this,
+          [this](LayerBase* layer) {
+            if (!doc_ || !layer) return;
+            doc_->setActiveLayerId(layer->id);
+            doc_->setSelectedLayerIds({layer->id});
+            onLayerDuplicate();
+          });
+  connect(layersPanel_, &LayersPanel::deleteLayerRequested, this,
+          [this](LayerBase* layer) {
+            if (!doc_ || !layer) return;
+            doc_->setActiveLayerId(layer->id);
+            doc_->setSelectedLayerIds({layer->id});
+            onLayerDelete();
+          });
+  connect(layersPanel_, &LayersPanel::groupLayerRequested, this,
+          [this](LayerBase* layer) {
+            if (!doc_ || !layer) return;
+            doc_->setActiveLayerId(layer->id);
+            doc_->setSelectedLayerIds({layer->id});
+            onLayerGroupActive();
+          });
+  connect(layersPanel_, &LayersPanel::addLayerMaskRequested, this,
+          [this](LayerBase* layer) {
+            if (!doc_ || !layer) return;
+            doc_->setActiveLayerId(layer->id);
+            onAddLayerMask();
+          });
+  // Rename is a UI-only gesture: the row widget's QLineEdit is already
+  // the surface. We just re-trigger the same in-place edit path the
+  // row's double-click uses. The row owns the edit; emit a focus signal
+  // back into the row by activating it via the panel (sets current
+  // row + active layer) and synthesizing a "begin rename" by calling a
+  // helper. Simplest: set the layer active and let the user double-
+  // click — but a context menu that doesn't open the edit is poor UX.
+  // We can't reach across into the LayerRowWidget's private slot, so
+  // route via panel which finds the right row and triggers the edit.
+  connect(layersPanel_, &LayersPanel::renameLayerRequested, this,
+          [this](LayerBase* layer) {
+            if (!doc_ || !layer || !layersPanel_) return;
+            doc_->setActiveLayerId(layer->id);
+            layersPanel_->beginRenameForLayer(layer->id);
+          });
   // M6-S1: drag-and-drop layer reorder + drop-into-group. The panel
   // emits this with the FINAL desired tree index; LayerTree::move accepts
   // it directly. Wrap in a LayerOpCommand so the move is undoable.

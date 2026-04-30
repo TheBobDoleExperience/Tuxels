@@ -36,6 +36,10 @@ class LayersPanel : public QDockWidget {
   void setDocument(Document* doc);
   void refresh();
 
+  // M7-S6: triggers the in-place rename edit on the row showing the
+  // given layer id (no-op if the row isn't currently rendered).
+  void beginRenameForLayer(LayerId id);
+
   // Test-only accessors. The panel's rebuild walks the tree top-down with
   // depth indices; tests inspect the resulting row widgets directly.
   int rowCountForTesting() const;
@@ -61,6 +65,14 @@ class LayersPanel : public QDockWidget {
   // M7-S5: in-place rename committed in a row widget.
   void nameChangeRequested(LayerBase* layer, std::string oldName,
                             std::string newName);
+  // M7-S6: right-click context-menu actions on a row widget. Panel
+  // re-emits; MainWindow sets the layer active + reuses existing
+  // global-action slots.
+  void duplicateLayerRequested(LayerBase* layer);
+  void deleteLayerRequested(LayerBase* layer);
+  void groupLayerRequested(LayerBase* layer);
+  void addLayerMaskRequested(LayerBase* layer);
+  void renameLayerRequested(LayerBase* layer);
   // M6-S1: emitted by the embedded list widget when the user drops a row.
   // `targetParentId == 0` means root. `targetIndex` is the FINAL desired
   // tree-index of the moved layer in the destination parent (post-move

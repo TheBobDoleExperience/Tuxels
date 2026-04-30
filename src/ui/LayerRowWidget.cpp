@@ -312,6 +312,15 @@ void LayerRowWidget::onOpacitySliderReleased() {
   emit opacityEditCommitted(layer_, opacityBeforeDrag_, newVal);
 }
 
+void LayerRowWidget::beginRename() {
+  if (!layer_ || !nameEdit_ || !nameLabel_) return;
+  nameEdit_->setText(QString::fromStdString(layer_->name));
+  nameLabel_->hide();
+  nameEdit_->show();
+  nameEdit_->setFocus();
+  nameEdit_->selectAll();
+}
+
 void LayerRowWidget::commitNameEdit() {
   if (!layer_ || !nameEdit_ || !nameEdit_->isVisible()) return;
   const std::string newName = nameEdit_->text().toStdString();
@@ -503,13 +512,50 @@ void LayerRowWidget::contextMenuEvent(QContextMenuEvent* event) {
     QWidget::contextMenuEvent(event);
     return;
   }
+  const bool isGroup = layer_->kind() == LayerKind::Group;
+  const bool isPixel = layer_->kind() == LayerKind::Pixel;
+  const bool hasMask = layer_->mask != nullptr;
+
   QMenu menu(this);
+  // Most-frequent actions at the top, in PS order.
+  auto* duplicateAct = menu.addAction(tr("&Duplicate Layer"));
+  duplicateAct->setShortcut(QKeySequence("Ctrl+J"));
+
+  auto* deleteAct = menu.addAction(tr("De&lete Layer"));
+
+  auto* renameAct = menu.addAction(tr("&Rename Layer"));
+
+  menu.addSeparator();
+
+  // Group: only show "Wrap in Group" for non-group rows. The menu doesn't
+  // have an Ungroup action — Layer menu / Ctrl+Shift+G covers it (the
+  // active layer must already be a group for that).
+  QAction* groupAct = nullptr;
+  if (!isGroup) {
+    groupAct = menu.addAction(tr("&Group Layer"));
+    groupAct->setShortcut(QKeySequence("Ctrl+G"));
+  }
+
+  // Mask: only for pixel layers without an existing mask.
+  QAction* addMaskAct = nullptr;
+  if (isPixel && !hasMask) {
+    addMaskAct = menu.addAction(tr("Add Layer &Mask"));
+  }
+
+  menu.addSeparator();
   const bool clipped = layer_->clipToBelow;
   auto* clipAct = menu.addAction(clipped ? tr("Release Clipping Mask")
                                           : tr("Create Clipping Mask"));
   clipAct->setShortcut(QKeySequence("Ctrl+Alt+G"));
+
   QAction* chosen = menu.exec(event->globalPos());
   if (chosen == clipAct) emit toggleClipToBelowRequested(layer_);
+  else if (chosen == duplicateAct) emit duplicateLayerRequested(layer_);
+  else if (chosen == deleteAct) emit deleteLayerRequested(layer_);
+  else if (chosen == renameAct) emit renameLayerRequested(layer_);
+  else if (groupAct && chosen == groupAct) emit groupLayerRequested(layer_);
+  else if (addMaskAct && chosen == addMaskAct)
+    emit addLayerMaskRequested(layer_);
   event->accept();
 }
 
