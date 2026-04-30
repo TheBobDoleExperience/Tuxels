@@ -308,6 +308,24 @@ Exclusion:    C = Cs + Cd - 2*Cs*Cd
 - **In-place rename (M7-S5).** `LayerRowWidget` carries a hidden `QLineEdit` alongside the name `QLabel`. `eventFilter` catches `QEvent::MouseButtonDblClick` on the label → label hidden + edit shown + focus + select-all. `editingFinished` (Enter or focus-loss) commits via `commitNameEdit`; Escape (intercepted in eventFilter) reverts. Empty-string + equal-string commits short-circuit. `bindToLayer` drops any in-progress edit so panel rebuilds reusing rows don't carry stale state. New `nameChangeRequested(layer, oldName, newName)` signal; `MainWindow::onLayerNameChange` wraps the diff in a `LayerOpCommand` with id-keyed layer resolution.
 - **Context menu (M7-S6).** `LayerRowWidget::contextMenuEvent` opens a `QMenu` with: Duplicate Layer (Ctrl+J), Delete Layer, Rename Layer, Group Layer (non-groups only), Add Layer Mask (pixel without existing mask), and the existing Create / Release Clipping Mask toggle. Items conditionally shown by kind / mask state. Five new signals carry the row's bound layer; the panel relays each upward. **PS-style activation:** the MainWindow lambdas first set the row's layer active + replace `Document::selectedLayerIds_` with `{layer}`, then reuse the existing global-action slots. Rename routes through new `LayerRowWidget::beginRename()` public helper + `LayersPanel::beginRenameForLayer(LayerId)` so the menu opens the same in-place edit the double-click does.
 
+## 24. Color Labels + .txl v6 (M8-S0)
+
+- `src/layers/LayerColorLabel.h` — `enum class LayerColorLabel : uint8_t { None=0, Red, Orange, Yellow, Green, Blue, Violet, Gray }` (8 entries, `kLayerColorLabelCount` constant for clamping reads). Visual-only — does NOT affect compose.
+- `LayerBase::colorLabel` field; `cloneLayer` propagates it; `LayerRowWidget` paints a 4-px-wide colored stripe at the row's left edge (`QPalette/setAutoFillBackground`; hidden when label==None). Right-click context menu's `Color` submenu lists all 8 entries (current label checked); the chosen action's `data()` carries the new `LayerColorLabel` ordinal which the dispatcher converts back to the enum. `MainWindow::colorLabelChangeRequested` lambda wraps the diff in a `LayerOpCommand` with id-keyed layer resolution.
+- `.txl` bumped to v6: a `colorLabel u8` after `clipToBelow` in each layer record. Reader gates with `hasColorLabelByte = (version >= kVersionCurrent)`; pre-v6 records load with `None`. CloseGroup record also writes a 0 byte for shape uniformity. Out-of-range byte values clamp to `None` so a corrupt / future-encoding file doesn't yield a UB-tagged enum value.
+
+## 25. Tablet Pressure (M8-S1)
+
+- `ToolBase::setPressure(float)` / `pressure()` (default 1.0). `CanvasView::tabletEvent` (new override) maps `QTabletEvent::TabletPress / TabletMove / TabletRelease` to the same press/move/release pipeline as mouse, but pushes pressure (clamped to [0,1]) into the active tool first. Mouse paths (`mousePressEvent`, `mouseMoveEvent`) reset pressure to 1.0 so non-tablet input keeps producing full-strength strokes.
+- `BrushEngine::setPressure(float)` stores `pressure_`; `applyStamp` adds `pressureScale = pressure_ < 1 - eps`. When non-trivial, the kernel is rebuilt at effective diameter `D * pressure_` (clamped ≥ 1, capped at 2× base) and `opEff *= pressure_`. The pre-M8 zero-jitter path is preserved bitwise-identical when `pressure_ == 1.0` — pinned by `brush_pressure_full_is_bitwise_identical_to_pre_m8`.
+- `BrushTool::press / move / release` reads `pressure()` from `ToolBase` and pushes into the engine on each call, so mid-stroke pressure changes are honored stamp-by-stamp.
+
+## 26. Rasterize Layer (M8-S2)
+
+- `Layer → Rasterize Layer` slot for groups. Clones the group's children into a fresh tmp `Document` at root (not the group itself), then `compose(tmp.tree(), flat)` produces the rasterized pixels. The new `PixelLayer` inherits `visible` / `opacity` / `blend` (Pass-Through → Normal) / `clipToBelow` / `colorLabel` / `mask` (deep-copied via `deepCopyTuxImage`). That arrangement keeps the composite over underlying layers consistent: the group's own mask + opacity + blend stay applied at compose time, just on the new pixel layer instead of the original group.
+- Pixel + adjustment kinds get a status-bar message ("Rasterize currently supports group layers only.") and no-op. PixelLayer is already raster; rasterizing an adjustment standalone is meaningless (PS uses Merge Down for that).
+- `deepCopyTuxImage` moved out of `CloneLayer.cpp`'s anon namespace into `CloneLayer.h` so future call sites (PSD import, Merge Down) can reuse the per-tile clone helper.
+
 ---
 
 ## Deviations from SCOPE.md (intentional, M0-only)

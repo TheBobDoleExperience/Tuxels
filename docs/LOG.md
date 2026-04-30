@@ -647,3 +647,44 @@ Free Transform on multi-select (originally planned as M7-S4)
 deferred to M8 — TransformTool's single-source architecture
 (one `src_` TuxImage, one `Override`, one PendingCommit) needs a
 deep refactor that doesn't fit a polish step.
+
+### M8 — Color labels / Tablet pressure / Rasterize ✅ shipped
+
+Continuing the same autonomous run, M8 picked three more
+incremental wins:
+
+- **M8-S0** (`0b7f472`). Per-layer color labels (8-color enum +
+  `LayerBase::colorLabel` field). Visual-only — doesn't affect
+  compose. LayerRowWidget paints a 4-px stripe at the left edge;
+  context menu has a `Color` submenu. `.txl` bumped to v6 with a
+  `colorLabel u8` after `clipToBelow`. Pre-v6 readers gated by
+  `hasColorLabelByte`. Out-of-range bytes clamp to None to defend
+  against corrupt / future-encoding files. New
+  `txl_v6_round_trip_preserves_color_label` test.
+
+- **M8-S1** (`2c232ad`). Tablet pressure wired through. CanvasView's
+  new `tabletEvent` override pushes pressure into the active tool
+  via `ToolBase::setPressure`; BrushEngine's `applyStamp` adds a
+  pressure-scale branch (effective diameter + opacity scale by
+  pressure). Mouse paths reset pressure to 1.0 so non-tablet input
+  keeps producing full-strength strokes. Three new tests including
+  a bitwise-identity guard for the pressure==1.0 no-jitter path.
+
+- **M8-S2** (`044deb1`). Rasterize Layer for groups. Clones the
+  group's children into a fresh tmp Document at root, composes
+  isolated against transparent; the new PixelLayer inherits the
+  group's blend + opacity + mask + colorLabel so the composite
+  over underlying layers stays consistent. `deepCopyTuxImage`
+  promoted out of CloneLayer.cpp's anon namespace into
+  CloneLayer.h (PSD import / Merge Down will reuse it).
+
+- **M8-S3** (this commit). STATUS / NEXT / ARCHITECTURE / LOG
+  updated. Tag `v0.8.0-m8` + push.
+
+Pace check: M5 → M8 in one autonomous session (4 milestones, 22
+commits, 41 executables / 403 cases). Cumulative test growth from
+M5 (37 execs / 364 cases) is +4 execs / +39 cases. The big-ticket
+"Free Transform on multi-select" item has been deferred from M7
+through M8; it's still the right call as a dedicated milestone
+because TransformTool's single-source architecture refactor isn't
+a polish step.
