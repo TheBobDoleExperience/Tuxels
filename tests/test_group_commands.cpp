@@ -525,4 +525,103 @@ TEST(histogram_below_target_inside_passthrough_group) {
   CHECK_EQ(hist.buckets[3][150], 16u);
 }
 
+// ---------- M7-S1 cross-scope Up/Down ----------
+//
+// MainWindow's onLayerMoveUp/Down detect "at the top of a group" /
+// "at the bottom of a group" and pop the layer OUT into the parent
+// scope. The closures use tree.move(fromP, fromI, toP, toI). We
+// replicate that data-flow here at the Document level — the symmetric
+// undo path (toP, toI, fromP, fromI) restores the original layout.
+
+TEST(move_up_at_top_of_group_pops_out_to_parent_scope) {
+  Document doc(8, 8);
+  PixelLayer* a = doc.addBlankPixelLayer("A");
+  // Build [A, group{B, C}]: active C is at top of group.
+  auto* g = new GroupLayer();
+  g->id = doc.nextLayerId();
+  g->name = "G";
+  doc.tree().add(std::unique_ptr<LayerBase>(g));
+  auto pb = std::make_unique<PixelLayer>(8, 8);
+  pb->id = doc.nextLayerId();
+  pb->name = "B";
+  PixelLayer* b = pb.get();
+  g->children.push_back(std::move(pb));
+  auto pc = std::make_unique<PixelLayer>(8, 8);
+  pc->id = doc.nextLayerId();
+  pc->name = "C";
+  PixelLayer* c = pc.get();
+  g->children.push_back(std::move(pc));
+  doc.setActiveLayerId(c->id);
+  (void)a;
+
+  auto loc = doc.tree().locate(c->id);
+  CHECK(loc.has_value());
+  CHECK(loc->parent == g);
+  CHECK_EQ(loc->index, std::size_t{1});
+  // C is at top of group's children (idx 1, count 2). Up should pop it
+  // out: target = (root, group's idx + 1).
+  const std::size_t siblingCount = g->children.size();
+  CHECK(loc->index + 1 >= siblingCount);
+
+  // Replicate the closure: locate group's idx, target = (null, gidx + 1).
+  auto gLoc = doc.tree().locate(g->id);
+  doc.tree().move(g, /*fromIdx=*/loc->index, /*toParent=*/nullptr,
+                   /*toIdx=*/gLoc->index + 1);
+
+  // Tree should now be [A, group{B}, C].
+  CHECK_EQ(doc.tree().size(), std::size_t{3});
+  CHECK(doc.tree().at(0)->id == a->id);
+  CHECK(doc.tree().at(1) == g);
+  CHECK_EQ(g->children.size(), std::size_t{1});
+  CHECK(g->children[0]->id == b->id);
+  CHECK(doc.tree().at(2)->id == c->id);
+
+  // Symmetric undo via tree.move(toParent, toIdx, fromParent, fromIdx).
+  auto cLoc = doc.tree().locate(c->id);
+  doc.tree().move(cLoc->parent, cLoc->index, g, /*toIdx=*/1);
+  CHECK_EQ(doc.tree().size(), std::size_t{2});
+  CHECK_EQ(g->children.size(), std::size_t{2});
+  CHECK(g->children[0]->id == b->id);
+  CHECK(g->children[1]->id == c->id);
+}
+
+TEST(move_down_at_bottom_of_group_pops_out_below_group) {
+  Document doc(8, 8);
+  // Build [group{B, C}, A]: active B is at bottom of group.
+  auto g = std::make_unique<GroupLayer>();
+  g->id = doc.nextLayerId();
+  g->name = "G";
+  GroupLayer* gPtr = g.get();
+  doc.tree().add(std::move(g));
+  auto pb = std::make_unique<PixelLayer>(8, 8);
+  pb->id = doc.nextLayerId();
+  pb->name = "B";
+  PixelLayer* b = pb.get();
+  gPtr->children.push_back(std::move(pb));
+  auto pc = std::make_unique<PixelLayer>(8, 8);
+  pc->id = doc.nextLayerId();
+  pc->name = "C";
+  PixelLayer* c = pc.get();
+  gPtr->children.push_back(std::move(pc));
+  PixelLayer* a = doc.addBlankPixelLayer("A");
+  doc.setActiveLayerId(b->id);
+  (void)c;
+  (void)a;
+
+  auto loc = doc.tree().locate(b->id);
+  CHECK(loc->index == std::size_t{0});
+  // Down at idx 0 → pop out below group: target = (root, group's idx).
+  auto gLoc = doc.tree().locate(gPtr->id);
+  doc.tree().move(gPtr, /*fromIdx=*/0, /*toParent=*/nullptr,
+                   /*toIdx=*/gLoc->index);
+
+  // Tree should now be [B, group{C}, A].
+  CHECK_EQ(doc.tree().size(), std::size_t{3});
+  CHECK(doc.tree().at(0)->id == b->id);
+  CHECK(doc.tree().at(1) == gPtr);
+  CHECK_EQ(gPtr->children.size(), std::size_t{1});
+  CHECK(gPtr->children[0]->id == c->id);
+  CHECK(doc.tree().at(2)->id == a->id);
+}
+
 int main() { return ::tuxels::testing::run(); }

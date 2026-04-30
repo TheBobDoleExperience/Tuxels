@@ -1329,21 +1329,53 @@ void MainWindow::onLayerMoveUp() {
   GroupLayer* parent = loc->parent;
   const std::size_t siblingCount = parent ? parent->children.size()
                                            : doc_->tree().size();
-  if (loc->index + 1 >= siblingCount) {
-    statusBar()->showMessage(
-        parent ? tr("Already at top of group")
-               : tr("Already at top of stack"),
-        1500);
-    return;
-  }
-  const std::size_t from = loc->index;
-  const std::size_t to = from + 1;
-  const LayerId parentId = parent ? parent->id : 0;
 
   auto resolveParent = [this](LayerId pid) -> GroupLayer* {
     if (pid == 0) return nullptr;
     return dynamic_cast<GroupLayer*>(doc_->tree().findById(pid));
   };
+
+  // M7-S1: at the top of a group, Up pops the layer OUT into the
+  // parent scope at (group's idx + 1) — directly above the group in
+  // the panel. Cascades through nested groups: each Ctrl+] pops one
+  // level. At the top of root, the message stays.
+  if (loc->index + 1 >= siblingCount) {
+    if (parent == nullptr) {
+      statusBar()->showMessage(tr("Already at top of stack"), 1500);
+      return;
+    }
+    auto parentLoc = doc_->tree().locate(parent->id);
+    if (!parentLoc) return;
+    const LayerId fromParentId = parent->id;
+    const std::size_t fromIdx = loc->index;
+    const LayerId toParentId =
+        parentLoc->parent ? parentLoc->parent->id : 0;
+    const std::size_t toIdx = parentLoc->index + 1;
+
+    auto doIt = [this, fromParentId, fromIdx, toParentId, toIdx, activeId,
+                 resolveParent]() {
+      doc_->tree().move(resolveParent(fromParentId), fromIdx,
+                        resolveParent(toParentId), toIdx);
+      doc_->setActiveLayerId(activeId);
+      refreshAfterUndoRedo();
+    };
+    auto undoIt = [this, fromParentId, fromIdx, toParentId, toIdx, activeId,
+                   resolveParent]() {
+      doc_->tree().move(resolveParent(toParentId), toIdx,
+                        resolveParent(fromParentId), fromIdx);
+      doc_->setActiveLayerId(activeId);
+      refreshAfterUndoRedo();
+    };
+    doIt();
+    undoStack_->push(std::make_unique<LayerOpCommand>(
+        "Move Layer Up (out of group)", std::move(doIt), std::move(undoIt)));
+    return;
+  }
+
+  // Same-scope forward move.
+  const std::size_t from = loc->index;
+  const std::size_t to = from + 1;
+  const LayerId parentId = parent ? parent->id : 0;
 
   auto doIt = [this, parentId, from, to, activeId, resolveParent]() {
     GroupLayer* p = resolveParent(parentId);
@@ -1371,21 +1403,52 @@ void MainWindow::onLayerMoveDown() {
   auto loc = doc_->tree().locate(activeId);
   if (!loc) return;
   GroupLayer* parent = loc->parent;
-  if (loc->index == 0) {
-    statusBar()->showMessage(
-        parent ? tr("Already at bottom of group")
-               : tr("Already at bottom of stack"),
-        1500);
-    return;
-  }
-  const std::size_t from = loc->index;
-  const std::size_t to = from - 1;
-  const LayerId parentId = parent ? parent->id : 0;
 
   auto resolveParent = [this](LayerId pid) -> GroupLayer* {
     if (pid == 0) return nullptr;
     return dynamic_cast<GroupLayer*>(doc_->tree().findById(pid));
   };
+
+  // M7-S1: at the bottom of a group, Down pops the layer OUT into the
+  // parent scope at the group's own idx — directly below the group in
+  // the panel. At the bottom of root the message stays.
+  if (loc->index == 0) {
+    if (parent == nullptr) {
+      statusBar()->showMessage(tr("Already at bottom of stack"), 1500);
+      return;
+    }
+    auto parentLoc = doc_->tree().locate(parent->id);
+    if (!parentLoc) return;
+    const LayerId fromParentId = parent->id;
+    const std::size_t fromIdx = 0;
+    const LayerId toParentId =
+        parentLoc->parent ? parentLoc->parent->id : 0;
+    const std::size_t toIdx = parentLoc->index;
+
+    auto doIt = [this, fromParentId, fromIdx, toParentId, toIdx, activeId,
+                 resolveParent]() {
+      doc_->tree().move(resolveParent(fromParentId), fromIdx,
+                        resolveParent(toParentId), toIdx);
+      doc_->setActiveLayerId(activeId);
+      refreshAfterUndoRedo();
+    };
+    auto undoIt = [this, fromParentId, fromIdx, toParentId, toIdx, activeId,
+                   resolveParent]() {
+      doc_->tree().move(resolveParent(toParentId), toIdx,
+                        resolveParent(fromParentId), fromIdx);
+      doc_->setActiveLayerId(activeId);
+      refreshAfterUndoRedo();
+    };
+    doIt();
+    undoStack_->push(std::make_unique<LayerOpCommand>(
+        "Move Layer Down (out of group)", std::move(doIt), std::move(undoIt)));
+    return;
+  }
+
+  // Same-scope backward move.
+  const std::size_t from = loc->index;
+  const std::size_t to = from - 1;
+  const LayerId parentId = parent ? parent->id : 0;
 
   auto doIt = [this, parentId, from, to, activeId, resolveParent]() {
     GroupLayer* p = resolveParent(parentId);
