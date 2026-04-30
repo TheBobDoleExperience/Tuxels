@@ -4,19 +4,18 @@
 
 ## Immediately Next
 
-**M8 shipped** as `v0.8.0-m8` on 2026-04-30 (403 cases / 41 execs):
-- M8-S0 per-layer color labels + .txl v6 (`0b7f472`)
-- M8-S1 tablet pressure (`2c232ad`)
-- M8-S2 Rasterize Layer for groups (`044deb1`)
-- M8-S3 docs + tag
+**M9 shipped** as `v0.9.0-m9` on 2026-04-30 (single-step milestone):
+- M9-S0 Merge Down (`3f2b586`)
+- M9-S1 docs + tag
 
 Tag pushed; main pushed.
 
-**Start here: M9 kickoff.** Free Transform on multi-select is still
-the #1 deferred candidate. After eight milestones of polish + features,
-a deep-refactor step is overdue. Plus several smaller items remain.
+**Start here: M10 kickoff.** Free Transform on multi-select remains
+the #1 deferred candidate — it's been pushed across M7 → M8 → M9
+because it requires a deep refactor of TransformTool's single-source
+architecture, not a polish step. M10 is the right place for it.
 
-## M9 Candidates
+## M10 Candidates
 
 1. **Free Transform on multi-select** (still deferred). The TransformTool's
    single-source architecture (one `src_` TuxImage, one Override, one
@@ -42,16 +41,16 @@ a deep-refactor step is overdue. Plus several smaller items remain.
 6. **"Isolate adjustments" toggle** for groups (separate from blend
    mode). One bool on GroupLayer + .txl v7.
 
-7. **Merge Down.** PS Ctrl+E: combines the active layer with the one
-   below into a single pixel layer, baking the active's effect.
-   Smaller than Rasterize because the inputs are clear (active + below).
-
-8. **Performance pass.** Multi-thread compose per tile; per-tile GPU
+7. **Performance pass.** Multi-thread compose per tile; per-tile GPU
    upload. Largest engineering scope, no user-visible features.
 
-9. **Brush mid-stroke seamless cursor radius update.** Today the cursor
+8. **Brush mid-stroke seamless cursor radius update.** Today the cursor
    ring is fixed to brush.diameter; with M8-S1 pressure, the effective
    diameter shrinks dynamically and the ring no longer matches.
+
+9. **Merge Down through groups / adjustments.** M9-S0 only handles
+   Pixel-into-Pixel. Group + adjustment cases need rasterize-then-merge
+   semantics; queued.
 
 Kickoff agenda: pick the scope, draft a plan, commit via
 ExitPlanMode.
@@ -63,12 +62,12 @@ cmake --build build && ctest --test-dir build
 QT_QPA_PLATFORM=offscreen timeout 2 ./build/tuxels
 ```
 
-Expect 41 executables / 403 internal cases at `v0.8.0-m8`.
+Expect 41 executables / 403 internal cases at `v0.9.0-m9`.
 
 ## Cold-Start Checklist
 
-1. `cat docs/STATUS.md` — current state (M8 ✅ shipped, M9 TBD).
-2. This file — M9 kickoff candidates.
+1. `cat docs/STATUS.md` — current state (M9 ✅ shipped, M10 TBD).
+2. This file — M10 kickoff candidates.
 3. `cat docs/ARCHITECTURE.md` — don't re-derive decisions:
    - M5-S0 added recursive `LayerTree`
    - M5-S1 added Pass-Through vs. isolated compose recursion
@@ -87,7 +86,9 @@ Expect 41 executables / 403 internal cases at `v0.8.0-m8`.
    - M8-S1 ToolBase::setPressure + BrushEngine pressure scaling
    - M8-S2 Rasterize Layer (clones children to tmp doc, composes
      isolated; `deepCopyTuxImage` now public)
+   - M9-S0 Merge Down (Ctrl+E) — pixel-into-pixel only;
+     same compose-isolated pattern as Rasterize but two layers
 4. `git log --oneline -25` + `git tag --list` — recent commits and
-   shipped tags (`v0.0.1-m0` through `v0.8.0-m8`).
+   shipped tags (`v0.0.1-m0` through `v0.9.0-m9`).
 5. `cmake --build build && ctest --test-dir build` — confirm
-   green tree (41 executables / 403 cases at `v0.8.0-m8`).
+   green tree (41 executables / 403 cases at `v0.9.0-m9`).

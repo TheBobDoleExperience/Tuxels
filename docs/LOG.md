@@ -688,3 +688,18 @@ M5 (37 execs / 364 cases) is +4 execs / +39 cases. The big-ticket
 through M8; it's still the right call as a dedicated milestone
 because TransformTool's single-source architecture refactor isn't
 a polish step.
+
+### M9 — Merge Down ✅ shipped (single-step)
+
+- **M9-S0** (`3f2b586`). PS-style Ctrl+E merges the active pixel
+  layer with the pixel layer immediately below. Same
+  compose-isolated pattern as M8-S2 Rasterize but with two
+  layers as input. Three shared_ptr stashes (below + active +
+  merged) ferry the layers across LayerOpCommand cycles. Order-
+  sensitive doIt() removal: active first, then below.
+- **M9-S1** (this commit). Docs + tag `v0.9.0-m9` + push.
+
+End of session: 5 milestones shipped (M5 push + M6 + M7 + M8 + M9),
+24 commits on main, 41 executables / 403 internal cases (up from
+M5's 37 / 364). Free Transform on multi-select remains the #1
+deferred item; M10 is its natural home.

@@ -342,3 +342,9 @@ Exclusion:    C = Cs + Cd - 2*Cs*Cd
 ## Open Questions
 
 *(None blocking M0. Future decisions logged here as they arise.)*
+
+## 27. Merge Down (M9-S0)
+
+- `Layer → Merge Down` (Ctrl+E) for pixel layers. Applicable when the active layer is a `PixelLayer` and the layer immediately below in the same tree scope is also a `PixelLayer`. Other combinations (active is group/adjustment, below is group/adjustment, active at scope bottom) get a status-bar message and no-op.
+- Implementation mirrors Rasterize Layer: clones below + active into a fresh tmp `Document` at root, runs `compose(tmp.tree(), flat)` so the active's blend / opacity / mask interact with below's pixels exactly as they would in-document, then installs the resulting flat image as a single `PixelLayer` at below's slot. The merged layer inherits below's name / visibility / blend / clipToBelow / colorLabel; opacity becomes 1.0 (baked); no mask (both layers' masks were applied during compose).
+- Three `shared_ptr<unique_ptr<LayerBase>>` stashes ferry below + active + merged across the `LayerOpCommand` cycle. doIt() removal is order-sensitive: active first (at `belowIdx + 1`), then below (at `belowIdx`) so the recorded indices stay valid in the post-removal frame.
