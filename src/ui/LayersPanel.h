@@ -78,6 +78,10 @@ class LayersPanel : public QDockWidget {
   // Chevron click on a group row — flip the group's `isExpanded` flag and
   // re-walk the tree so the panel shows / hides its children.
   void onGroupChevronToggled(GroupLayer* group);
+  // M6-S2: collect selected rows' layer ids and push into the Document's
+  // selection set. Fired by QListWidget on every Shift / Ctrl / single
+  // click selection change.
+  void onSelectionChanged();
 
  private:
   Document* doc_ = nullptr;

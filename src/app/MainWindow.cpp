@@ -790,6 +790,147 @@ void MainWindow::onLayerNewGroup() {
 
 void MainWindow::onLayerGroupActive() {
   if (!doc_) return;
+
+  // M6-S2 batch group: if the multi-selection set has more than one
+  // entry, wrap them all in a single new group inserted at the topmost
+  // (last in flatten order) selected layer's slot. Children land in
+  // bottom-up tree order so the group's internal order matches the
+  // original layout.
+  if (undoStack_ && doc_->selectedLayerIds().size() > 1) {
+    std::vector<LayerBase*> selLayers = doc_->selectedLayers();
+    std::vector<LayerId> filtered;
+    filtered.reserve(selLayers.size());
+    for (LayerBase* layer : selLayers) {
+      bool ancestorSelected = false;
+      auto curLoc = doc_->tree().locate(layer->id);
+      GroupLayer* p = curLoc ? curLoc->parent : nullptr;
+      while (p != nullptr && !ancestorSelected) {
+        for (LayerBase* sel : selLayers) {
+          if (sel->id == p->id) {
+            ancestorSelected = true;
+            break;
+          }
+        }
+        if (ancestorSelected) break;
+        auto pLoc = doc_->tree().locate(p->id);
+        p = pLoc ? pLoc->parent : nullptr;
+      }
+      if (!ancestorSelected) filtered.push_back(layer->id);
+    }
+    if (filtered.size() < 2) {
+      // Fall through to single-layer path below.
+    } else {
+      // Order filtered ids by flatten() encounter order (bottom-up).
+      std::vector<LayerId> ordered;
+      ordered.reserve(filtered.size());
+      for (LayerBase* layer : doc_->tree().flatten()) {
+        for (LayerId id : filtered) {
+          if (layer->id == id) {
+            ordered.push_back(id);
+            break;
+          }
+        }
+      }
+
+      int existingGroups = 0;
+      doc_->tree().forEach([&existingGroups](const LayerBase* l) {
+        if (l && l->kind() == LayerKind::Group) ++existingGroups;
+      });
+      const std::string groupName =
+          "Group " + std::to_string(existingGroups + 1);
+      const LayerId groupId = doc_->nextLayerId();
+
+      // Stash captures every removal's record + the eventual group slot.
+      // Populated by doIt; drained by undoIt.
+      struct ChildRecord {
+        LayerId id;
+        LayerId parentId;
+        std::size_t idx;
+      };
+      auto records = std::make_shared<std::vector<ChildRecord>>();
+      auto stashGroup = std::make_shared<std::unique_ptr<LayerBase>>();
+
+      auto resolveParent = [this](LayerId pid) -> GroupLayer* {
+        if (pid == 0) return nullptr;
+        return dynamic_cast<GroupLayer*>(doc_->tree().findById(pid));
+      };
+
+      auto doIt = [this, ordered, records, stashGroup, groupId, groupName,
+                   resolveParent]() mutable {
+        records->clear();
+        std::vector<std::unique_ptr<LayerBase>> children;
+        children.reserve(ordered.size());
+        LayerId capturedParentId = 0;
+        std::size_t capturedIdx = 0;
+        for (LayerId id : ordered) {
+          auto loc2 = doc_->tree().locate(id);
+          if (!loc2) continue;
+          capturedParentId = loc2->parent ? loc2->parent->id : 0;
+          capturedIdx = loc2->index;
+          records->push_back({id, capturedParentId, capturedIdx});
+          auto ptr = doc_->tree().removeFromPath(loc2->parent, capturedIdx);
+          if (ptr) children.push_back(std::move(ptr));
+        }
+        if (children.empty()) return;
+        std::unique_ptr<LayerBase> group;
+        if (*stashGroup) {
+          group = std::move(*stashGroup);
+          auto* gPtr = static_cast<GroupLayer*>(group.get());
+          gPtr->children = std::move(children);
+        } else {
+          auto g = std::make_unique<GroupLayer>();
+          g->id = groupId;
+          g->name = groupName;
+          g->children = std::move(children);
+          group = std::move(g);
+        }
+        doc_->tree().insertAtPath(resolveParent(capturedParentId),
+                                    capturedIdx, std::move(group));
+        doc_->setActiveLayerId(groupId);
+        doc_->setSelectedLayerIds({groupId});
+        refreshAfterUndoRedo();
+      };
+      auto undoIt = [this, records, stashGroup, groupId,
+                     resolveParent]() mutable {
+        // Pull the new group out of the tree, hold its children, then
+        // re-insert each child at its original slot in reverse order.
+        auto loc2 = doc_->tree().locate(groupId);
+        if (!loc2) return;
+        auto group = doc_->tree().removeFromPath(loc2->parent, loc2->index);
+        if (!group) return;
+        auto* gPtr = static_cast<GroupLayer*>(group.get());
+        std::vector<std::unique_ptr<LayerBase>> children;
+        children.reserve(gPtr->children.size());
+        for (auto& c : gPtr->children) children.push_back(std::move(c));
+        gPtr->children.clear();
+        // Reverse iteration: records are in same order as `children`, so
+        // walking both backwards re-inserts at the right slot.
+        for (std::size_t i = records->size(); i-- > 0;) {
+          if (i >= children.size()) continue;
+          const auto& r = (*records)[i];
+          auto& cptr = children[i];
+          if (cptr) {
+            doc_->tree().insertAtPath(resolveParent(r.parentId), r.idx,
+                                        std::move(cptr));
+          }
+        }
+        // Restore selection / active to the original ids.
+        std::vector<LayerId> sel;
+        sel.reserve(records->size());
+        for (const auto& r : *records) sel.push_back(r.id);
+        doc_->setSelectedLayerIds(sel);
+        if (!sel.empty()) doc_->setActiveLayerId(sel.back());
+        *stashGroup = std::move(group);
+        refreshAfterUndoRedo();
+      };
+
+      doIt();
+      undoStack_->push(std::make_unique<LayerOpCommand>(
+          "Group Layers", std::move(doIt), std::move(undoIt)));
+      return;
+    }
+  }
+
   const LayerId activeId = doc_->activeLayerId();
   if (activeId == 0) return;
   auto loc = doc_->tree().locate(activeId);
@@ -1033,6 +1174,95 @@ void MainWindow::onLayerAdd() {
 
 void MainWindow::onLayerDelete() {
   if (!doc_) return;
+
+  // M6-S2 batch delete: if the multi-selection set has more than one
+  // entry, delete them all in a single undo entry. Filter out any layer
+  // whose ancestor is also selected (the ancestor's deletion sweeps the
+  // descendant's subtree along).
+  if (undoStack_ && doc_->selectedLayerIds().size() > 1) {
+    std::vector<LayerBase*> selLayers = doc_->selectedLayers();
+    std::vector<LayerId> filtered;
+    filtered.reserve(selLayers.size());
+    for (LayerBase* layer : selLayers) {
+      bool ancestorSelected = false;
+      auto curLoc = doc_->tree().locate(layer->id);
+      GroupLayer* p = curLoc ? curLoc->parent : nullptr;
+      while (p != nullptr && !ancestorSelected) {
+        for (LayerBase* sel : selLayers) {
+          if (sel->id == p->id) {
+            ancestorSelected = true;
+            break;
+          }
+        }
+        if (ancestorSelected) break;
+        auto pLoc = doc_->tree().locate(p->id);
+        p = pLoc ? pLoc->parent : nullptr;
+      }
+      if (!ancestorSelected) filtered.push_back(layer->id);
+    }
+    if (filtered.empty()) return;
+
+    struct DeleteRecord {
+      LayerId id;
+      LayerId parentId;
+      std::size_t idx;
+      std::unique_ptr<LayerBase> ptr;
+    };
+    auto stashes = std::make_shared<std::vector<DeleteRecord>>();
+
+    auto resolveParent = [this](LayerId pid) -> GroupLayer* {
+      if (pid == 0) return nullptr;
+      return dynamic_cast<GroupLayer*>(doc_->tree().findById(pid));
+    };
+
+    auto doIt = [this, filtered, stashes, resolveParent]() mutable {
+      stashes->clear();
+      for (LayerId id : filtered) {
+        auto loc2 = doc_->tree().locate(id);
+        if (!loc2) continue;
+        const LayerId parentId =
+            loc2->parent ? loc2->parent->id : 0;
+        const std::size_t idx = loc2->index;
+        auto ptr = doc_->tree().removeFromPath(loc2->parent, idx);
+        if (ptr) {
+          stashes->push_back({id, parentId, idx, std::move(ptr)});
+        }
+      }
+      // Pick a sensible new active layer: top of root, or zero if empty.
+      LayerId newActive = 0;
+      if (!doc_->tree().empty()) {
+        newActive = doc_->tree().at(doc_->tree().size() - 1)->id;
+      }
+      doc_->setActiveLayerId(newActive);
+      doc_->setSelectedLayerIds(newActive == 0
+                                    ? std::vector<LayerId>{}
+                                    : std::vector<LayerId>{newActive});
+      refreshAfterUndoRedo();
+    };
+    auto undoIt = [this, stashes, resolveParent]() mutable {
+      // Reverse insertion so the recorded (parent, idx) slots are valid
+      // in the then-current tree state.
+      for (auto it = stashes->rbegin(); it != stashes->rend(); ++it) {
+        if (it->ptr) {
+          doc_->tree().insertAtPath(resolveParent(it->parentId), it->idx,
+                                     std::move(it->ptr));
+        }
+      }
+      // Restore selection to the just-restored layers.
+      std::vector<LayerId> sel;
+      sel.reserve(stashes->size());
+      for (const auto& r : *stashes) sel.push_back(r.id);
+      doc_->setSelectedLayerIds(sel);
+      if (!sel.empty()) doc_->setActiveLayerId(sel.back());
+      refreshAfterUndoRedo();
+    };
+
+    doIt();
+    undoStack_->push(std::make_unique<LayerOpCommand>(
+        "Delete Layers", std::move(doIt), std::move(undoIt)));
+    return;
+  }
+
   const LayerId activeId = doc_->activeLayerId();
   if (activeId == 0) return;
   auto loc = doc_->tree().locate(activeId);
@@ -1388,6 +1618,48 @@ void MainWindow::onEditRedo() {
 
 void MainWindow::onLayerVisibilityChange(LayerBase* layer, bool oldVal, bool newVal) {
   if (!layer || !undoStack_) return;
+  // M6-S2: if the layer is in the multi-selection set, mirror the toggle
+  // across all selected layers as a single undo entry. PS behavior: every
+  // selected layer takes the new value; per-layer prior state is captured
+  // for undo.
+  const auto& selIds = doc_ ? doc_->selectedLayerIds()
+                            : std::vector<LayerId>{};
+  bool isInSel = false;
+  for (LayerId id : selIds) {
+    if (id == layer->id) {
+      isInSel = true;
+      break;
+    }
+  }
+  if (isInSel && selIds.size() > 1) {
+    std::vector<bool> oldVals;
+    oldVals.reserve(selIds.size());
+    for (LayerId id : selIds) {
+      if (auto* l = doc_->tree().findById(id)) oldVals.push_back(l->visible);
+      else oldVals.push_back(false);
+    }
+    auto resolveLayer = [this](LayerId id) -> LayerBase* {
+      return doc_ ? doc_->tree().findById(id) : nullptr;
+    };
+    auto idsCopy = selIds;
+    auto doIt = [this, idsCopy, newVal, resolveLayer]() {
+      for (LayerId id : idsCopy) {
+        if (auto* l = resolveLayer(id)) l->visible = newVal;
+      }
+      refreshAfterUndoRedo();
+    };
+    auto undoIt = [this, idsCopy, oldVals, resolveLayer]() {
+      for (std::size_t i = 0; i < idsCopy.size(); ++i) {
+        if (auto* l = resolveLayer(idsCopy[i])) l->visible = oldVals[i];
+      }
+      refreshAfterUndoRedo();
+    };
+    doIt();
+    undoStack_->push(std::make_unique<LayerOpCommand>(
+        "Toggle Visibility (Layers)", std::move(doIt), std::move(undoIt)));
+    return;
+  }
+
   auto doIt = [this, layer, newVal]() {
     layer->visible = newVal;
     refreshAfterUndoRedo();

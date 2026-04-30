@@ -42,7 +42,10 @@ class LayerListWidget : public QListWidget {
  public:
   LayerListWidget(LayersPanel* panel, QWidget* parent = nullptr)
       : QListWidget(parent), panel_(panel) {
-    setSelectionMode(QAbstractItemView::SingleSelection);
+    // M6-S2: Extended selection enables Shift-click range + Ctrl-click
+    // toggle. Single click still replaces the selection with the clicked
+    // row (matches PS).
+    setSelectionMode(QAbstractItemView::ExtendedSelection);
     setUniformItemSizes(false);
     setDragEnabled(true);
     setAcceptDrops(true);
@@ -204,6 +207,11 @@ LayersPanel::LayersPanel(QWidget* parent)
   list_ = new LayerListWidget(this, container);
   connect(list_, &QListWidget::currentRowChanged, this,
           &LayersPanel::onCurrentRowChanged);
+  // M6-S2: every selection change (Shift-range / Ctrl-toggle / single
+  // click) pushes the row-set into Document::selectedLayerIds. The
+  // currentRow signal still drives activeLayerId.
+  connect(list_, &QListWidget::itemSelectionChanged, this,
+          &LayersPanel::onSelectionChanged);
   vbox->addWidget(list_, /*stretch=*/1);
 
   setWidget(container);
@@ -310,6 +318,24 @@ void LayersPanel::refresh() {
       }
     }
   }
+  // M6-S2: re-apply the multi-selection set onto the QListWidget so
+  // selections survive reorders + group expansion. Active id is already
+  // included in the selection by convention; if the set is empty we
+  // fall back to the current row's selection.
+  const auto& selIds = doc_->selectedLayerIds();
+  if (!selIds.empty()) {
+    list_->clearSelection();
+    for (int i = 0; i < static_cast<int>(rows_.size()); ++i) {
+      LayerBase* l = rows_[static_cast<std::size_t>(i)]->layer();
+      if (!l) continue;
+      for (LayerId sid : selIds) {
+        if (l->id == sid) {
+          list_->item(i)->setSelected(true);
+          break;
+        }
+      }
+    }
+  }
   for (int i = 0; i < static_cast<int>(rows_.size()); ++i) {
     rows_[static_cast<std::size_t>(i)]->setActive(i == list_->currentRow());
     rows_[static_cast<std::size_t>(i)]->setPaintTarget(doc_->paintTarget());
@@ -337,6 +363,20 @@ void LayersPanel::onCurrentRowChanged(int row) {
     rows_[static_cast<std::size_t>(i)]->setActive(i == row);
   }
   emit activeLayerChanged();
+}
+
+void LayersPanel::onSelectionChanged() {
+  if (refreshing_ || !doc_) return;
+  std::vector<LayerId> ids;
+  ids.reserve(rows_.size());
+  for (int i = 0; i < static_cast<int>(rows_.size()); ++i) {
+    auto* item = list_->item(i);
+    if (item && item->isSelected()) {
+      LayerBase* l = rows_[static_cast<std::size_t>(i)]->layer();
+      if (l) ids.push_back(l->id);
+    }
+  }
+  doc_->setSelectedLayerIds(std::move(ids));
 }
 
 void LayersPanel::onLayerRowMutated(LayerBase* /*layer*/) {

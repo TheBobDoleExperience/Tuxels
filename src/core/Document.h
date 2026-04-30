@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 #include "core/SelectionMask.h"
 #include "layers/LayerBase.h"
@@ -99,6 +100,26 @@ class Document {
     return activeLayerId_ == 0 ? nullptr : tree_.findById(activeLayerId_);
   }
 
+  // M6-S2 multi-selection. Independent of `activeLayerId_` (the anchor /
+  // last-clicked row); the panel maintains both. Tools currently read only
+  // `activeLayer()`; batch ops (delete / group / visibility) read this set
+  // and operate on the union. Stale ids (layer destroyed) are filtered by
+  // `selectedLayers()`.
+  const std::vector<LayerId>& selectedLayerIds() const noexcept {
+    return selectedLayerIds_;
+  }
+  void setSelectedLayerIds(std::vector<LayerId> ids) noexcept {
+    selectedLayerIds_ = std::move(ids);
+  }
+  std::vector<LayerBase*> selectedLayers() {
+    std::vector<LayerBase*> out;
+    out.reserve(selectedLayerIds_.size());
+    for (LayerId id : selectedLayerIds_) {
+      if (auto* l = tree_.findById(id)) out.push_back(l);
+    }
+    return out;
+  }
+
   LayerId nextLayerId() noexcept { return ++nextId_; }
 
   // Seed the internal id counter so the next call to `nextLayerId()` returns
@@ -165,6 +186,7 @@ class Document {
   LayerId nextId_ = 0;
   PaintTarget paintTarget_ = PaintTarget::Layer;
   std::unique_ptr<SelectionMask> selection_;
+  std::vector<LayerId> selectedLayerIds_;
 };
 
 }  // namespace tuxels
