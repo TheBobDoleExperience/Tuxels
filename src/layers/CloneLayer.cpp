@@ -38,6 +38,7 @@ void copyCommonBaseFields(LayerBase& dst, const LayerBase& src) {
   dst.originX = src.originX;
   dst.originY = src.originY;
   dst.clipToBelow = src.clipToBelow;
+  dst.colorLabel = src.colorLabel;
   if (src.mask) {
     auto m = std::make_unique<LayerMask>();
     m->image = deepCopyImage(src.mask->image);

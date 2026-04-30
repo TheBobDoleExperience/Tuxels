@@ -6,6 +6,7 @@
 
 #include "compositor/BlendMode.h"
 #include "core/Document.h"
+#include "layers/LayerColorLabel.h"
 
 class QListWidget;
 class QListWidgetItem;
@@ -73,6 +74,8 @@ class LayersPanel : public QDockWidget {
   void groupLayerRequested(LayerBase* layer);
   void addLayerMaskRequested(LayerBase* layer);
   void renameLayerRequested(LayerBase* layer);
+  void colorLabelChangeRequested(LayerBase* layer, LayerColorLabel oldLabel,
+                                  LayerColorLabel newLabel);
   // M6-S1: emitted by the embedded list widget when the user drops a row.
   // `targetParentId == 0` means root. `targetIndex` is the FINAL desired
   // tree-index of the moved layer in the destination parent (post-move

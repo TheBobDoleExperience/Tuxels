@@ -26,10 +26,31 @@
 #include "core/TuxImage.h"
 #include "layers/GroupLayer.h"
 #include "layers/LayerBase.h"
+#include "layers/LayerColorLabel.h"
 #include "layers/LayerMask.h"
 #include "layers/PixelLayer.h"
 
 namespace tuxels {
+
+namespace {
+
+// PS-style label palette. None returns an invalid color — callers test
+// `isValid()` to decide whether to paint the stripe.
+QColor colorForLabel(LayerColorLabel l) {
+  switch (l) {
+    case LayerColorLabel::None:   return QColor();
+    case LayerColorLabel::Red:    return QColor(232, 80, 80);
+    case LayerColorLabel::Orange: return QColor(232, 152, 56);
+    case LayerColorLabel::Yellow: return QColor(232, 220, 64);
+    case LayerColorLabel::Green:  return QColor(96, 200, 96);
+    case LayerColorLabel::Blue:   return QColor(80, 144, 232);
+    case LayerColorLabel::Violet: return QColor(168, 96, 232);
+    case LayerColorLabel::Gray:   return QColor(160, 160, 160);
+  }
+  return QColor();
+}
+
+}  // namespace
 
 namespace {
 constexpr int kThumbPx = 40;
@@ -59,6 +80,14 @@ LayerRowWidget::LayerRowWidget(QWidget* parent) : QWidget(parent) {
   auto* layout = new QHBoxLayout(this);
   layout->setContentsMargins(4, 2, 4, 2);
   layout->setSpacing(6);
+
+  // M8-S0: per-layer color stripe. Hidden by default — `bindToLayer`
+  // shows + tints it based on the bound layer's `colorLabel`.
+  colorStripe_ = new QWidget(this);
+  colorStripe_->setFixedWidth(4);
+  colorStripe_->setAutoFillBackground(true);
+  colorStripe_->setVisible(false);
+  layout->addWidget(colorStripe_);
 
   visCheck_ = new QCheckBox(this);
   visCheck_->setToolTip(tr("Toggle visibility"));
@@ -189,6 +218,18 @@ void LayerRowWidget::bindToLayer(LayerBase* layer) {
     if (chevron_) {
       chevron_->setVisible(isGroup);
       updateChevronGlyph();
+    }
+    // M8-S0: per-layer color stripe.
+    if (colorStripe_) {
+      QColor c = colorForLabel(layer_->colorLabel);
+      if (c.isValid()) {
+        QPalette pal = colorStripe_->palette();
+        pal.setColor(QPalette::Window, c);
+        colorStripe_->setPalette(pal);
+        colorStripe_->setVisible(true);
+      } else {
+        colorStripe_->setVisible(false);
+      }
     }
     rebuildThumbnail();
     rebuildMaskThumbnail();
@@ -548,6 +589,25 @@ void LayerRowWidget::contextMenuEvent(QContextMenuEvent* event) {
                                           : tr("Create Clipping Mask"));
   clipAct->setShortcut(QKeySequence("Ctrl+Alt+G"));
 
+  // M8-S0: color label submenu. Each entry stores the LayerColorLabel
+  // ordinal in `data()` so the dispatcher can recover it from the
+  // chosen QAction*.
+  auto* colorMenu = menu.addMenu(tr("&Color"));
+  static constexpr LayerColorLabel kAllLabels[] = {
+      LayerColorLabel::None,   LayerColorLabel::Red,
+      LayerColorLabel::Orange, LayerColorLabel::Yellow,
+      LayerColorLabel::Green,  LayerColorLabel::Blue,
+      LayerColorLabel::Violet, LayerColorLabel::Gray,
+  };
+  for (LayerColorLabel l : kAllLabels) {
+    const auto sv = layerColorLabelName(l);
+    auto* act = colorMenu->addAction(
+        QString::fromUtf8(sv.data(), static_cast<int>(sv.size())));
+    act->setCheckable(true);
+    act->setChecked(layer_->colorLabel == l);
+    act->setData(static_cast<int>(l));
+  }
+
   QAction* chosen = menu.exec(event->globalPos());
   if (chosen == clipAct) emit toggleClipToBelowRequested(layer_);
   else if (chosen == duplicateAct) emit duplicateLayerRequested(layer_);
@@ -556,6 +616,13 @@ void LayerRowWidget::contextMenuEvent(QContextMenuEvent* event) {
   else if (groupAct && chosen == groupAct) emit groupLayerRequested(layer_);
   else if (addMaskAct && chosen == addMaskAct)
     emit addLayerMaskRequested(layer_);
+  else if (chosen && chosen->parent() == colorMenu) {
+    const auto newLabel =
+        static_cast<LayerColorLabel>(chosen->data().toInt());
+    if (newLabel != layer_->colorLabel) {
+      emit colorLabelChangeRequested(layer_, layer_->colorLabel, newLabel);
+    }
+  }
   event->accept();
 }
 

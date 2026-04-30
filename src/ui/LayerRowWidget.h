@@ -5,6 +5,7 @@
 
 #include "compositor/BlendMode.h"
 #include "core/Document.h"
+#include "layers/LayerColorLabel.h"
 
 class QCheckBox;
 class QComboBox;
@@ -92,6 +93,9 @@ class LayerRowWidget : public QWidget {
   void groupLayerRequested(LayerBase* layer);
   void addLayerMaskRequested(LayerBase* layer);
   void renameLayerRequested(LayerBase* layer);
+  // M8-S0: color label change from the row's context menu.
+  void colorLabelChangeRequested(LayerBase* layer, LayerColorLabel oldLabel,
+                                  LayerColorLabel newLabel);
 
  protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
@@ -118,6 +122,10 @@ class LayerRowWidget : public QWidget {
   float opacityBeforeDrag_ = 1.f;
   int indentDepth_ = 0;
   bool comboHasPassThrough_ = false;
+
+  // M8-S0: 4-px-wide colored stripe at the row's left edge. Hidden when
+  // colorLabel == None.
+  QWidget* colorStripe_ = nullptr;
 
   QCheckBox* visCheck_ = nullptr;
   QLabel* chevron_ = nullptr;

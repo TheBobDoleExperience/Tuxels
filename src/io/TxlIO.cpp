@@ -30,7 +30,8 @@ namespace tuxels {
 namespace {
 
 constexpr char kMagic[8] = {'T', 'U', 'X', 'E', 'L', 'S', '\x01', '\x00'};
-constexpr uint32_t kVersionCurrent = 5;
+constexpr uint32_t kVersionCurrent = 6;
+constexpr uint32_t kVersionV5 = 5;
 constexpr uint32_t kVersionV4 = 4;
 constexpr uint32_t kVersionV3 = 3;
 constexpr uint32_t kVersionV2 = 2;
@@ -265,6 +266,9 @@ bool writeLayerRecords(std::ofstream& out,
                       (layer->mask && layer->mask->enabled) ? 1 : 0));
     writeRaw(out, static_cast<uint8_t>(layer->mask ? 1 : 0));
     writeRaw(out, static_cast<uint8_t>(layer->clipToBelow ? 1 : 0));
+    // M8-S0: color label byte (.txl v6+). Pre-v6 readers wouldn't see
+    // this; we always emit current version, so the field round-trips.
+    writeRaw(out, static_cast<uint8_t>(layer->colorLabel));
     writeRaw(out, layer->opacity);
     writeRaw(out, static_cast<uint32_t>(layer->blend));
 
@@ -359,6 +363,7 @@ bool writeLayerRecords(std::ofstream& out,
       writeRaw(out, static_cast<uint8_t>(0));         // maskEnabled
       writeRaw(out, static_cast<uint8_t>(0));         // hasMask
       writeRaw(out, static_cast<uint8_t>(0));         // clipToBelow
+      writeRaw(out, static_cast<uint8_t>(0));         // colorLabel (v6+)
       writeRaw(out, static_cast<float>(0));           // opacity
       writeRaw(out, static_cast<uint32_t>(0));        // blend
       writeRaw(out, static_cast<uint32_t>(0));        // W
@@ -435,9 +440,9 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
 
   uint32_t version = 0, flags = 0;
   readRaw(in, version);
-  if (version != kVersionCurrent && version != kVersionV4 &&
-      version != kVersionV3 && version != kVersionV2 &&
-      version != kVersionV1) {
+  if (version != kVersionCurrent && version != kVersionV5 &&
+      version != kVersionV4 && version != kVersionV3 &&
+      version != kVersionV2 && version != kVersionV1) {
     setErr(err, "Unsupported .txl version: " + std::to_string(version));
     return std::nullopt;
   }
@@ -449,7 +454,8 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
   const bool hasOriginFields = (version >= kVersionV2);
   const bool acceptsAdjustmentKinds = (version >= kVersionV3);
   const bool hasClipByte = (version >= kVersionV4);
-  const bool acceptsGroupKinds = (version >= kVersionCurrent);
+  const bool acceptsGroupKinds = (version >= kVersionV5);
+  const bool hasColorLabelByte = (version >= kVersionCurrent);
 
   uint32_t w = 0, h = 0;
   int32_t activeLayer = 0;
@@ -495,6 +501,7 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
     uint64_t id = 0;
     uint8_t kind = 0, visible = 0, maskEnabled = 0, hasMask = 0;
     uint8_t clipToBelow = 0;
+    uint8_t colorLabel = 0;
     float opacity = 1.f;
     uint32_t blend = 0, nameLen = 0;
     readRaw(in, id);
@@ -503,6 +510,7 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
     readRaw(in, maskEnabled);
     readRaw(in, hasMask);
     if (hasClipByte) readRaw(in, clipToBelow);
+    if (hasColorLabelByte) readRaw(in, colorLabel);
     readRaw(in, opacity);
     readRaw(in, blend);
 
@@ -665,6 +673,12 @@ std::optional<std::unique_ptr<Document>> loadTxl(const std::string& path,
     layer->originX = originX;
     layer->originY = originY;
     layer->clipToBelow = (clipToBelow != 0);
+    // Clamp out-of-range bytes to None so a corrupt / future-encoding file
+    // doesn't produce a UB-tagged enum value.
+    layer->colorLabel =
+        colorLabel < kLayerColorLabelCount
+            ? static_cast<LayerColorLabel>(colorLabel)
+            : LayerColorLabel::None;
 
     if (hasMask) {
       // Pixel masks match the backing image; adjustment + group masks are

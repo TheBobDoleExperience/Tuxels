@@ -370,6 +370,8 @@ void LayersPanel::refresh() {
             &LayersPanel::addLayerMaskRequested);
     connect(row, &LayerRowWidget::renameLayerRequested, this,
             &LayersPanel::renameLayerRequested);
+    connect(row, &LayerRowWidget::colorLabelChangeRequested, this,
+            &LayersPanel::colorLabelChangeRequested);
 
     auto* item = new QListWidgetItem();
     item->setSizeHint(row->sizeHint());

@@ -7,6 +7,7 @@
 #include "compositor/BlendMode.h"
 #include "core/Pixel.h"
 #include "core/Tile.h"
+#include "layers/LayerColorLabel.h"
 #include "layers/LayerMask.h"
 
 namespace tuxels {
@@ -49,6 +50,10 @@ class LayerBase {
   // Field lives on the base so a future PixelLayer-clipping path can reuse
   // it without surgery, but M4 only honors the flag for adjustment layers.
   bool clipToBelow = false;
+
+  // PS-style color tag (M8-S0). Visual organizer only — does NOT affect
+  // compose. Persists in `.txl` v6+. Pre-v6 files load with `None`.
+  LayerColorLabel colorLabel = LayerColorLabel::None;
 
   // Tells the compositor which rendering path applies. `PixelLayer` uses the
   // default; `AdjustmentLayer` overrides to `Adjustment`.

@@ -422,6 +422,30 @@ void MainWindow::buildDocks() {
             doc_->setActiveLayerId(layer->id);
             layersPanel_->beginRenameForLayer(layer->id);
           });
+  // M8-S0: color label change. Wrapped in a LayerOpCommand so the diff
+  // is undoable; layer resolved by id so reorders + group migrations
+  // don't break the redo path.
+  connect(layersPanel_, &LayersPanel::colorLabelChangeRequested, this,
+          [this](LayerBase* layer, LayerColorLabel oldLabel,
+                 LayerColorLabel newLabel) {
+            if (!doc_ || !layer || !undoStack_) return;
+            if (oldLabel == newLabel) return;
+            const LayerId id = layer->id;
+            auto resolveLayer = [this, id]() -> LayerBase* {
+              return doc_ ? doc_->tree().findById(id) : nullptr;
+            };
+            auto doIt = [this, resolveLayer, newLabel]() {
+              if (auto* l = resolveLayer()) l->colorLabel = newLabel;
+              refreshAfterUndoRedo();
+            };
+            auto undoIt = [this, resolveLayer, oldLabel]() {
+              if (auto* l = resolveLayer()) l->colorLabel = oldLabel;
+              refreshAfterUndoRedo();
+            };
+            doIt();
+            undoStack_->push(std::make_unique<LayerOpCommand>(
+                "Change Color Label", std::move(doIt), std::move(undoIt)));
+          });
   // M6-S1: drag-and-drop layer reorder + drop-into-group. The panel
   // emits this with the FINAL desired tree index; LayerTree::move accepts
   // it directly. Wrap in a LayerOpCommand so the move is undoable.

@@ -17,6 +17,7 @@
 #include "layers/CurvesAdjustment.h"
 #include "layers/GroupLayer.h"
 #include "layers/HueSaturation.h"
+#include "layers/LayerColorLabel.h"
 #include "layers/LayerMask.h"
 #include "layers/LevelsAdjustment.h"
 #include "layers/PixelLayer.h"
@@ -1005,6 +1006,32 @@ TEST(txl_v5_reader_accepts_v4_pixel_only_file) {
   CHECK(px->clipToBelow);
   CHECK_NEAR(px->opacity, 0.5f, 1e-5f);
   CHECK_EQ(px->id, LayerId{7});
+}
+
+// ---------- M8-S0: .txl v6 color label round-trip ----------
+
+TEST(txl_v6_round_trip_preserves_color_label) {
+  const std::string path = tmpPath("color_label");
+  PathGuard g{path};
+
+  Document src(8, 8);
+  PixelLayer* a = src.addBlankPixelLayer("A");
+  PixelLayer* b = src.addBlankPixelLayer("B");
+  PixelLayer* c = src.addBlankPixelLayer("C");
+  a->colorLabel = LayerColorLabel::Red;
+  b->colorLabel = LayerColorLabel::Blue;
+  c->colorLabel = LayerColorLabel::None;
+
+  std::string err;
+  CHECK(saveTxl(path, src, &err));
+
+  auto loaded = loadTxl(path, &err);
+  CHECK(loaded.has_value());
+  Document* lp = loaded->get();
+  CHECK_EQ(static_cast<int>(lp->tree().size()), 3);
+  CHECK(lp->tree().at(0)->colorLabel == LayerColorLabel::Red);
+  CHECK(lp->tree().at(1)->colorLabel == LayerColorLabel::Blue);
+  CHECK(lp->tree().at(2)->colorLabel == LayerColorLabel::None);
 }
 
 }  // namespace tuxels
