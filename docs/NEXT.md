@@ -4,18 +4,23 @@
 
 ## Immediately Next
 
-**M10 shipped** as `v0.10.0-m10` on 2026-04-30 (407 cases / 41 execs):
-- M10-S0 compose() span of overrides (`25dd3d0`)
-- M10-S1+S2 TransformTool multi-source + batched commit (`fad8eff`)
-- M10-S3 docs + tag
+**M11 shipped** as `v0.11.0-m11` on 2026-04-30:
+- M11-S0 brush cursor radius reflects pressure (`2e7dcfd`)
+- M11-S1 Eyedropper tool (`70a8bd9`)
+- M11-S2 docs + tag
 
-Tag pushed; main pushed. The M7-deferred Free-Transform-multi-select
-work is finally landed.
+**M10 shipped** as `v0.10.0-m10` on 2026-04-30 (407 cases / 41 execs).
+M10-S0 compose() span overrides (`25dd3d0`); M10-S1+S2 TransformTool
+multi-source + batched commit (`fad8eff`); M10-S3 docs + tag. The
+M7-deferred Free-Transform-multi-select work is finally landed.
 
-**Start here: M11 kickoff.** With the headline architectural item shipped,
-the deferred list is back to feature additions and polish.
+Tags pushed; main pushed.
 
-## M11 Candidates
+**Start here: M12 kickoff.** With Free Transform multi-select +
+Eyedropper landed, the next-biggest gaps are PSD import, Smart
+Objects, and Layer Effects.
+
+## M12 Candidates
 
 1. **PSD import (read-only).** SCOPE.md §5.1 — deferred since M0.
    Largest pure-format work; binary edge cases gnarly. The .txl v5
@@ -39,10 +44,10 @@ the deferred list is back to feature additions and polish.
    `QFontMetrics` for glyph layout; resterize on demand into a tile-
    sparse TuxImage.
 
-5. **Brush mid-stroke seamless cursor radius update.** Today the cursor
-   ring is fixed to `brush.diameter`; with M8-S1 pressure, the
-   effective diameter shrinks dynamically and the ring no longer
-   matches the actual stamp footprint. Small (~30 min).
+5. **Color picker: Alt-eyedropper while in Brush.** Today Eyedropper is
+   keyboard-only. PS lets you Alt+click while the Brush tool is active
+   to temporarily pick a color without switching tools. Small follow-up
+   to M11-S1 (~30 min).
 
 6. **Performance pass.** Multi-thread `composeTileRange` per tile;
    per-tile GPU upload via QOpenGLTexture; lazy histogram recompute.
@@ -54,12 +59,8 @@ the deferred list is back to feature additions and polish.
 8. **Merge Down through groups / adjustments.** M9-S0 only handles
    pixel-into-pixel.
 
-9. **Color picker tool (Eyedropper).** PS keyboard `I`. Reads pixel
-   under cursor, sets foreground color. Optional Alt+click while in
-   the Brush tool.
-
-10. **Layer search / filter** in LayersPanel. Type-to-filter the row
-    list — useful in deeply nested docs.
+9. **Layer search / filter** in LayersPanel. Type-to-filter the row
+   list — useful in deeply nested docs.
 
 Kickoff agenda: pick the scope, draft a plan, commit via
 ExitPlanMode.
@@ -71,12 +72,12 @@ cmake --build build && ctest --test-dir build
 QT_QPA_PLATFORM=offscreen timeout 2 ./build/tuxels
 ```
 
-Expect 41 executables / 407 internal cases at `v0.10.0-m10`.
+Expect 41 executables / 407 internal cases at `v0.11.0-m11`.
 
 ## Cold-Start Checklist
 
-1. `cat docs/STATUS.md` — current state (M10 ✅ shipped, M11 TBD).
-2. This file — M11 kickoff candidates.
+1. `cat docs/STATUS.md` — current state (M11 ✅ shipped, M12 TBD).
+2. This file — M12 kickoff candidates.
 3. `cat docs/ARCHITECTURE.md` — don't re-derive decisions:
    - M5 layer tree + recursive compose + .txl v5 sections
    - M6 group properties / D&D / multi-select
@@ -85,7 +86,8 @@ Expect 41 executables / 407 internal cases at `v0.10.0-m10`.
    - M8 color labels (.txl v6) / tablet pressure / Rasterize
    - M9 Merge Down
    - M10 compose span overrides + TransformTool multi-source
+   - M11 pressure-aware brush cursor + Eyedropper tool
 4. `git log --oneline -25` + `git tag --list` — recent commits and
-   shipped tags (`v0.0.1-m0` through `v0.10.0-m10`).
+   shipped tags (`v0.0.1-m0` through `v0.11.0-m11`).
 5. `cmake --build build && ctest --test-dir build` — confirm
-   green tree (41 executables / 407 cases at `v0.10.0-m10`).
+   green tree (41 executables / 407 cases at `v0.11.0-m11`).

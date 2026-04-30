@@ -761,3 +761,24 @@ Cumulative deferred-list cleared:
 Remaining big-ticket items (M11+): PSD import (read-only),
 Smart Objects, Layer effects (drop shadow / glow / stroke), Text
 layers, Performance pass.
+
+### M11 — Pressure-aware cursor + Eyedropper ✅ shipped
+
+- **M11-S0** (`2e7dcfd`). BrushTool's cursorRadiusPx now scales by
+  pressure(). The ring shrinks dynamically when the stylus
+  pressure drops, matching the actual stamp footprint that
+  BrushEngine::applyStamp will paint. Three-line override change.
+
+- **M11-S1** (`70a8bd9`). Eyedropper tool. New header-only
+  EyedropperTool with a std::function pick callback; MainWindow
+  wires to CanvasView::sampleComposite + ToolsPanel::
+  setForegroundColor (both new). 'I' keyboard shortcut.
+  PointingHandCursor while active. Transparent-sample short-
+  circuit so clicks on empty doc areas don't blow away the fg
+  color.
+
+- **M11-S2** (this commit). STATUS / NEXT / ARCHITECTURE / LOG
+  updated. Tag `v0.11.0-m11` + push.
+
+End of session: 7 milestones shipped (M5 push + M6 + M7 + M8 + M9
++ M10 + M11), 31+ commits, 41 executables / 407 internal cases.
