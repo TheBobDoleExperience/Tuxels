@@ -2657,17 +2657,67 @@ void MainWindow::onEditFreeTransform() {
 
 bool MainWindow::commitTransformIfActive() {
   if (!transformTool_ || !transformTool_->isActive()) return false;
-  auto p = transformTool_->commit();
-  if (!p) return false;  // identity → nothing to push
+  auto cs = transformTool_->commits();
+  if (cs.empty()) return false;  // identity → nothing to push
   // Unlike the Move tool, the Transform tool's live preview is a compose
-  // override — the real layer is untouched during the drag. Apply the
-  // command's side-effect *before* pushing so UndoStack's "state already
-  // matches after-commit" invariant holds.
-  auto cmd = std::make_unique<TransformCommand>(
-      doc_.get(), p->layerId, std::move(p->before), std::move(p->after),
-      p->beforeX, p->beforeY, p->afterX, p->afterY);
-  cmd->apply();
-  undoStack_->push(std::move(cmd));
+  // override — real layers are untouched during the drag. Apply each
+  // TransformCommand's side-effect *before* the LayerOpCommand wrapper
+  // so UndoStack's "state already matches after-commit" invariant holds.
+  // M10-S1: a multi-select Free Transform produces N (image, origin)
+  // pairs; wrap them in a single LayerOpCommand for atomic undo.
+  if (cs.size() == 1) {
+    auto& p = cs[0];
+    auto cmd = std::make_unique<TransformCommand>(
+        doc_.get(), p.layerId, std::move(p.before), std::move(p.after),
+        p.beforeX, p.beforeY, p.afterX, p.afterY);
+    cmd->apply();
+    undoStack_->push(std::move(cmd));
+  } else {
+    // Apply each commit immediately, then record the inverse path.
+    // Capture the per-source records by value into both closures.
+    struct Rec {
+      LayerId layerId;
+      TuxImage before;
+      TuxImage after;
+      int beforeX, beforeY, afterX, afterY;
+    };
+    std::vector<Rec> recs;
+    recs.reserve(cs.size());
+    for (auto& p : cs) {
+      Rec r{p.layerId, std::move(p.before), std::move(p.after),
+            p.beforeX, p.beforeY, p.afterX, p.afterY};
+      recs.push_back(std::move(r));
+    }
+    auto applyOne = [this](const Rec& r, bool toAfter) {
+      auto* l = doc_->tree().findById(r.layerId);
+      auto* px = dynamic_cast<PixelLayer*>(l);
+      if (!px) return;
+      if (toAfter) {
+        px->image = r.after;
+        l->originX = r.afterX;
+        l->originY = r.afterY;
+      } else {
+        px->image = r.before;
+        l->originX = r.beforeX;
+        l->originY = r.beforeY;
+      }
+    };
+    // Immediate apply.
+    for (auto& r : recs) applyOne(r, /*toAfter=*/true);
+    // Build closures that capture `recs` by value (each closure owns a
+    // copy; TuxImage's tile-shared_ptr makes the copy cheap).
+    auto recsShared = std::make_shared<std::vector<Rec>>(std::move(recs));
+    auto doIt = [this, recsShared, applyOne]() {
+      for (auto& r : *recsShared) applyOne(r, /*toAfter=*/true);
+      refreshAfterUndoRedo();
+    };
+    auto undoIt = [this, recsShared, applyOne]() {
+      for (auto& r : *recsShared) applyOne(r, /*toAfter=*/false);
+      refreshAfterUndoRedo();
+    };
+    undoStack_->push(std::make_unique<LayerOpCommand>(
+        "Free Transform (Layers)", std::move(doIt), std::move(undoIt)));
+  }
   if (canvas_) canvas_->requestRecomposite();
   if (layersPanel_) layersPanel_->refresh();
   return true;

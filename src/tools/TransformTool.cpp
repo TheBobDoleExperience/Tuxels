@@ -13,49 +13,97 @@ namespace tuxels {
 namespace {
 
 // Doc-pixel radius within which a click counts as a corner-handle grab.
-// Fixed for M2; future zoom-aware UI can override via CanvasView.
 constexpr float kCornerHitRadius = 10.f;
-
 // Doc-pixel radius for the pivot dot hit-test. Tested before corner so a
-// click that lands inside the corner hit region but closer to the pivot (e.g.
-// pivot moved onto a corner) still grabs the pivot.
+// click that lands inside the corner hit region but closer to the pivot
+// still grabs the pivot.
 constexpr float kPivotHitRadius = 8.f;
-
 // 15° snap step used for Shift-rotate.
 constexpr float kRotateSnapStep = 0.26179938779914943653855361527329f;  // π/12
 
-// src→doc affine. Scale + rotation are centered on the pivot (px, py); the
-// intermediate `translate(cx-px, cy-py)` re-inserts the offset between bbox
-// center and pivot so that when `pivot == center` the transform reduces to
-// the identity-pivot form `translate(-sw/2,-sh/2) · scale · rotate ·
-// translate(cx, cy)`.
-Affine2D buildSrcToDoc(float centerX, float centerY, float pivotX, float pivotY,
-                       float scaleX, float scaleY, float angle, int srcW,
-                       int srcH) {
-  return Affine2D::translation(-srcW * 0.5f, -srcH * 0.5f)
-      .then(Affine2D::translation(centerX - pivotX, centerY - pivotY))
+// Build the doc → doc transform that the user's gesture applies to every
+// source uniformly. The transform pivots scale + rotation around `pivot`
+// and adds a translation so that the bbox-union's original center moves to
+// `(centerX, centerY)`. At identity (centerX == bboxCenterInit, pivot ==
+// bboxCenterInit, scale == 1, angle == 0) this reduces to the identity
+// matrix — verified in the unit tests.
+//
+// Decomposition (right-to-left, since `then` left-multiplies in this
+// codebase): we want
+//
+//   doc' = R · S · (doc - pivot) + pivot + (centerX - bboxCenter, centerY -
+//   bboxCenter)
+//
+// which is equivalent to
+//
+//   doc' = R · S · (doc - bboxCenter + (bboxCenter - pivot)) + pivot +
+//         (centerX - bboxCenter, ...)
+//
+// expressed as the chain below.
+Affine2D buildDocToDoc(float centerX, float centerY, float pivotX,
+                       float pivotY, float scaleX, float scaleY, float angle,
+                       float bboxCenterX, float bboxCenterY) {
+  return Affine2D::translation(-bboxCenterX, -bboxCenterY)
+      .then(Affine2D::translation(bboxCenterX - pivotX, bboxCenterY - pivotY))
       .then(Affine2D::scaling(scaleX, scaleY))
       .then(Affine2D::rotation(angle))
-      .then(Affine2D::translation(pivotX, pivotY));
+      .then(Affine2D::translation(pivotX, pivotY))
+      .then(Affine2D::translation(centerX - bboxCenterX,
+                                   centerY - bboxCenterY));
 }
 
 }  // namespace
 
 bool TransformTool::enter(Document& doc) {
-  LayerBase* base = doc.activeLayer();
-  if (!base) return false;
-  auto* px = dynamic_cast<PixelLayer*>(base);
-  if (!px) return false;
+  // M10-S1: collect every PixelLayer from the multi-selection set;
+  // fall back to active when no multi-select is active. Non-pixel
+  // layers (groups, adjustments) are skipped silently — they have no
+  // backing image to transform.
+  sources_.clear();
+  std::vector<LayerBase*> candidates;
+  const auto& selIds = doc.selectedLayerIds();
+  if (!selIds.empty()) {
+    for (LayerId id : selIds) {
+      if (auto* l = doc.tree().findById(id)) candidates.push_back(l);
+    }
+  }
+  if (candidates.empty()) {
+    if (auto* a = doc.activeLayer()) candidates.push_back(a);
+  }
 
-  active_ = true;
-  layerId_ = base->id;
-  src_ = px->image;  // shared_ptr-backed tiles → cheap copy.
-  srcW_ = px->image.width();
-  srcH_ = px->image.height();
-  srcOriginX_ = base->originX;
-  srcOriginY_ = base->originY;
-  centerX_ = srcOriginX_ + srcW_ * 0.5f;
-  centerY_ = srcOriginY_ + srcH_ * 0.5f;
+  for (LayerBase* l : candidates) {
+    auto* px = dynamic_cast<PixelLayer*>(l);
+    if (!px) continue;
+    Source s;
+    s.layerId = l->id;
+    s.src = px->image;  // shared_ptr-backed tiles → cheap copy
+    s.srcW = px->image.width();
+    s.srcH = px->image.height();
+    s.srcOriginX = l->originX;
+    s.srcOriginY = l->originY;
+    sources_.push_back(std::move(s));
+  }
+  if (sources_.empty()) return false;
+
+  // Bbox-union of all sources' content rects in doc coords.
+  int minX = sources_[0].srcOriginX;
+  int minY = sources_[0].srcOriginY;
+  int maxX = sources_[0].srcOriginX + sources_[0].srcW;
+  int maxY = sources_[0].srcOriginY + sources_[0].srcH;
+  for (std::size_t i = 1; i < sources_.size(); ++i) {
+    const Source& s = sources_[i];
+    minX = std::min(minX, s.srcOriginX);
+    minY = std::min(minY, s.srcOriginY);
+    maxX = std::max(maxX, s.srcOriginX + s.srcW);
+    maxY = std::max(maxY, s.srcOriginY + s.srcH);
+  }
+  outerOriginX_ = minX;
+  outerOriginY_ = minY;
+  outerW_ = std::max(1, maxX - minX);
+  outerH_ = std::max(1, maxY - minY);
+
+  centerX_ = outerOriginX_ + outerW_ * 0.5f;
+  centerY_ = outerOriginY_ + outerH_ * 0.5f;
   scaleX_ = 1.f;
   scaleY_ = 1.f;
   angle_ = 0.f;
@@ -66,6 +114,7 @@ bool TransformTool::enter(Document& doc) {
   dragging_ = false;
   dragMode_ = DragMode::None;
   dragCorner_ = -1;
+  active_ = true;
   rebuildScratch();
   markWholeDocDirty(doc);
   return true;
@@ -73,33 +122,42 @@ bool TransformTool::enter(Document& doc) {
 
 void TransformTool::cancel() {
   active_ = false;
-  layerId_ = 0;
   dragging_ = false;
   dragMode_ = DragMode::None;
-  src_ = TuxImage();
-  scratch_ = TuxImage();
+  sources_.clear();
+}
+
+std::vector<TransformTool::PendingCommit> TransformTool::commits() {
+  if (!active_) return {};
+  // Identity-transform commit is a no-op for every source.
+  const float bboxCx = outerOriginX_ + outerW_ * 0.5f;
+  const float bboxCy = outerOriginY_ + outerH_ * 0.5f;
+  if (scaleX_ == 1.f && scaleY_ == 1.f && angle_ == 0.f &&
+      centerX_ == bboxCx && centerY_ == bboxCy) {
+    active_ = false;
+    return {};
+  }
+  std::vector<PendingCommit> out;
+  out.reserve(sources_.size());
+  for (auto& s : sources_) {
+    PendingCommit p;
+    p.layerId = s.layerId;
+    p.before = s.src;
+    p.after = s.scratch;
+    p.beforeX = s.srcOriginX;
+    p.beforeY = s.srcOriginY;
+    p.afterX = s.scratchOriginX;
+    p.afterY = s.scratchOriginY;
+    out.push_back(std::move(p));
+  }
+  active_ = false;
+  return out;
 }
 
 std::optional<TransformTool::PendingCommit> TransformTool::commit() {
-  if (!active_) return std::nullopt;
-  // Identity-transform commit is a no-op.
-  if (scaleX_ == 1.f && scaleY_ == 1.f && angle_ == 0.f &&
-      centerX_ == srcOriginX_ + srcW_ * 0.5f &&
-      centerY_ == srcOriginY_ + srcH_ * 0.5f) {
-    active_ = false;
-    return std::nullopt;
-  }
-
-  PendingCommit p;
-  p.layerId = layerId_;
-  p.before = src_;
-  p.after = scratch_;
-  p.beforeX = srcOriginX_;
-  p.beforeY = srcOriginY_;
-  p.afterX = scratchOriginX_;
-  p.afterY = scratchOriginY_;
-  active_ = false;
-  return p;
+  auto v = commits();
+  if (v.empty()) return std::nullopt;
+  return std::move(v.front());
 }
 
 void TransformTool::setTranslation(float cx, float cy) {
@@ -115,7 +173,6 @@ void TransformTool::setTranslation(float cx, float cy) {
 
 void TransformTool::setScale(float sx, float sy) {
   if (!active_) return;
-  // Guard against zero/negative scale — collapses to nothing visible.
   constexpr float kMinScale = 0.01f;
   scaleX_ = std::fabs(sx) < kMinScale ? (sx < 0.f ? -kMinScale : kMinScale) : sx;
   scaleY_ = std::fabs(sy) < kMinScale ? (sy < 0.f ? -kMinScale : kMinScale) : sy;
@@ -128,13 +185,18 @@ void TransformTool::setRotation(float radians) {
   rebuildScratch();
 }
 
-std::array<std::array<float, 2>, 4> TransformTool::computeCorners() const {
-  const Affine2D m = buildSrcToDoc(centerX_, centerY_, pivotX_, pivotY_,
-                                    scaleX_, scaleY_, angle_, srcW_, srcH_);
+std::array<std::array<float, 2>, 4> TransformTool::computeOuterCorners() const {
+  const float bboxCx = outerOriginX_ + outerW_ * 0.5f;
+  const float bboxCy = outerOriginY_ + outerH_ * 0.5f;
+  const Affine2D m =
+      buildDocToDoc(centerX_, centerY_, pivotX_, pivotY_, scaleX_, scaleY_,
+                     angle_, bboxCx, bboxCy);
   std::array<std::array<float, 2>, 4> c;
-  const float fW = static_cast<float>(srcW_);
-  const float fH = static_cast<float>(srcH_);
-  const float pts[4][2] = {{0.f, 0.f}, {fW, 0.f}, {fW, fH}, {0.f, fH}};
+  const float fX0 = static_cast<float>(outerOriginX_);
+  const float fY0 = static_cast<float>(outerOriginY_);
+  const float fX1 = static_cast<float>(outerOriginX_ + outerW_);
+  const float fY1 = static_cast<float>(outerOriginY_ + outerH_);
+  const float pts[4][2] = {{fX0, fY0}, {fX1, fY0}, {fX1, fY1}, {fX0, fY1}};
   for (int i = 0; i < 4; ++i) {
     m.mapPoint(pts[i][0], pts[i][1], c[i][0], c[i][1]);
   }
@@ -143,9 +205,6 @@ std::array<std::array<float, 2>, 4> TransformTool::computeCorners() const {
 
 bool TransformTool::pointInQuad(
     float x, float y, const std::array<std::array<float, 2>, 4>& q) const {
-  // Convex-quad test: point is inside iff cross products of consecutive
-  // edges with (point - vertex) all share the same sign. Handles CW and
-  // CCW winding (rotation flips the sign of all crosses uniformly).
   int sign = 0;
   for (int i = 0; i < 4; ++i) {
     const int j = (i + 1) % 4;
@@ -167,7 +226,7 @@ bool TransformTool::pointInQuad(
 
 int TransformTool::nearestCornerWithin(float x, float y,
                                        float maxDocDist) const {
-  const auto corners = computeCorners();
+  const auto corners = computeOuterCorners();
   int best = -1;
   float bestD2 = maxDocDist * maxDocDist;
   for (int i = 0; i < 4; ++i) {
@@ -182,34 +241,55 @@ int TransformTool::nearestCornerWithin(float x, float y,
   return best;
 }
 
-void TransformTool::rebuildScratch() {
-  if (!active_) return;
-  const auto corners = computeCorners();
-
-  float minX = corners[0][0], maxX = corners[0][0];
-  float minY = corners[0][1], maxY = corners[0][1];
+void TransformTool::rebuildScratchFor(Source& s) const {
+  // Apply the doc→doc transform to the source's 4 doc-coord corners; AABB
+  // of the transformed corners gives the new doc rect for this source.
+  const float bboxCx = outerOriginX_ + outerW_ * 0.5f;
+  const float bboxCy = outerOriginY_ + outerH_ * 0.5f;
+  const Affine2D docToDoc =
+      buildDocToDoc(centerX_, centerY_, pivotX_, pivotY_, scaleX_, scaleY_,
+                     angle_, bboxCx, bboxCy);
+  const float fX0 = static_cast<float>(s.srcOriginX);
+  const float fY0 = static_cast<float>(s.srcOriginY);
+  const float fX1 = static_cast<float>(s.srcOriginX + s.srcW);
+  const float fY1 = static_cast<float>(s.srcOriginY + s.srcH);
+  const float pts[4][2] = {{fX0, fY0}, {fX1, fY0}, {fX1, fY1}, {fX0, fY1}};
+  std::array<std::array<float, 2>, 4> tc;
+  for (int i = 0; i < 4; ++i) {
+    docToDoc.mapPoint(pts[i][0], pts[i][1], tc[i][0], tc[i][1]);
+  }
+  float minX = tc[0][0], maxX = tc[0][0];
+  float minY = tc[0][1], maxY = tc[0][1];
   for (int i = 1; i < 4; ++i) {
-    minX = std::min(minX, corners[i][0]);
-    maxX = std::max(maxX, corners[i][0]);
-    minY = std::min(minY, corners[i][1]);
-    maxY = std::max(maxY, corners[i][1]);
+    minX = std::min(minX, tc[i][0]);
+    maxX = std::max(maxX, tc[i][0]);
+    minY = std::min(minY, tc[i][1]);
+    maxY = std::max(maxY, tc[i][1]);
   }
   const int ox = static_cast<int>(std::floor(minX));
   const int oy = static_cast<int>(std::floor(minY));
   const int w = std::max(1, static_cast<int>(std::ceil(maxX)) - ox);
   const int h = std::max(1, static_cast<int>(std::ceil(maxY)) - oy);
 
-  scratchOriginX_ = ox;
-  scratchOriginY_ = oy;
-  scratch_ = TuxImage(w, h);
+  s.scratchOriginX = ox;
+  s.scratchOriginY = oy;
+  s.scratch = TuxImage(w, h);
 
-  const Affine2D srcToDoc = buildSrcToDoc(centerX_, centerY_, pivotX_, pivotY_,
-                                           scaleX_, scaleY_, angle_, srcW_,
-                                           srcH_);
+  // dst-local → src-local mapping for resampleBilinear:
+  //   dst-local + scratchOrigin → dst-doc
+  //   inverse(docToDoc)         → src-doc
+  //   - srcOrigin               → src-local
   const Affine2D dstLocalToSrc =
       Affine2D::translation(static_cast<float>(ox), static_cast<float>(oy))
-          .then(srcToDoc.inverse());
-  resampleBilinear(src_, scratch_, dstLocalToSrc);
+          .then(docToDoc.inverse())
+          .then(Affine2D::translation(-static_cast<float>(s.srcOriginX),
+                                       -static_cast<float>(s.srcOriginY)));
+  resampleBilinear(s.src, s.scratch, dstLocalToSrc);
+}
+
+void TransformTool::rebuildScratch() {
+  if (!active_) return;
+  for (auto& s : sources_) rebuildScratchFor(s);
 }
 
 void TransformTool::markWholeDocDirty(const Document& doc) {
@@ -219,12 +299,19 @@ void TransformTool::markWholeDocDirty(const Document& doc) {
 TransformTool::Overlay TransformTool::overlay() const {
   Overlay o;
   o.active = active_;
-  if (active_) {
-    o.layer.layerId = layerId_;
-    o.layer.image = &scratch_;
-    o.layer.originX = scratchOriginX_;
-    o.layer.originY = scratchOriginY_;
-    o.corners = computeCorners();
+  if (active_ && !sources_.empty()) {
+    o.overrides.reserve(sources_.size());
+    for (const auto& s : sources_) {
+      LayerOverride ov;
+      ov.layerId = s.layerId;
+      ov.image = &s.scratch;
+      ov.originX = s.scratchOriginX;
+      ov.originY = s.scratchOriginY;
+      o.overrides.push_back(ov);
+    }
+    // Legacy: first source's override mirrored into `o.layer`.
+    o.layer = o.overrides.front();
+    o.corners = computeOuterCorners();
     o.pivot = {pivotX_, pivotY_};
   }
   return o;
@@ -233,8 +320,6 @@ TransformTool::Overlay TransformTool::overlay() const {
 void TransformTool::press(Document& doc, float x, float y, MouseButton btn) {
   if (!active_ || btn != MouseButton::Left) return;
 
-  // Pivot hit-test runs before corner so the pivot stays grabbable when it
-  // drifts close to a corner.
   const float dpx = x - pivotX_;
   const float dpy = y - pivotY_;
   const bool hitPivot = (dpx * dpx + dpy * dpy) <=
@@ -246,7 +331,7 @@ void TransformTool::press(Document& doc, float x, float y, MouseButton btn) {
     mode = DragMode::Pivot;
   } else {
     corner = nearestCornerWithin(x, y, kCornerHitRadius);
-    const auto q = computeCorners();
+    const auto q = computeOuterCorners();
     if (corner >= 0) {
       mode = DragMode::Scale;
     } else if (pointInQuad(x, y, q)) {
@@ -270,17 +355,30 @@ void TransformTool::press(Document& doc, float x, float y, MouseButton btn) {
   dragStartPivotY_ = pivotY_;
 
   // For Scale: capture the grabbed corner's pre-scale local coords in the
-  // pre-rotation frame. `local = (src_corner - srcCenter) + (center - pivot)`.
-  // newScale = unrotated(cursor - pivot) / local.
+  // pre-rotation frame relative to the pivot. The corner is on the OUTER
+  // bbox (bbox-union of all sources). At drag start, the corner's
+  // un-rotated, un-translated, pre-scale position relative to the pivot
+  // is `(cornerX_initialDoc - pivotX, cornerY_initialDoc - pivotY)` in
+  // the bbox-center frame.
   if (mode == DragMode::Scale && corner >= 0) {
-    const float kx = dragStartCenterX_ - dragStartPivotX_ - srcW_ * 0.5f;
-    const float ky = dragStartCenterY_ - dragStartPivotY_ - srcH_ * 0.5f;
-    const float cornerOffsetX[4] = {0.f, static_cast<float>(srcW_),
-                                     static_cast<float>(srcW_), 0.f};
-    const float cornerOffsetY[4] = {0.f, 0.f, static_cast<float>(srcH_),
-                                     static_cast<float>(srcH_)};
-    dragStartLocalX_ = kx + cornerOffsetX[corner];
-    dragStartLocalY_ = ky + cornerOffsetY[corner];
+    const float bboxCx = outerOriginX_ + outerW_ * 0.5f;
+    const float bboxCy = outerOriginY_ + outerH_ * 0.5f;
+    const float cornerInitX[4] = {static_cast<float>(outerOriginX_),
+                                   static_cast<float>(outerOriginX_ + outerW_),
+                                   static_cast<float>(outerOriginX_ + outerW_),
+                                   static_cast<float>(outerOriginX_)};
+    const float cornerInitY[4] = {static_cast<float>(outerOriginY_),
+                                   static_cast<float>(outerOriginY_),
+                                   static_cast<float>(outerOriginY_ + outerH_),
+                                   static_cast<float>(outerOriginY_ + outerH_)};
+    // The drag-start pivot is in doc coords; the corner's "local" coords
+    // in the pre-rotation frame are `(corner - bboxCenter) + (bboxCenter
+    // - pivot) = corner - pivot`. (The buildDocToDoc decomposition above
+    // confirms this — at scale=1, angle=0, the doc→doc maps `corner` to
+    // `corner + (centerX-bboxCx, centerY-bboxCy)`, so the local coord
+    // relative to the pivot is `corner - pivot`.)
+    dragStartLocalX_ = cornerInitX[corner] - dragStartPivotX_;
+    dragStartLocalY_ = cornerInitY[corner] - dragStartPivotY_;
   } else {
     dragStartLocalX_ = 0.f;
     dragStartLocalY_ = 0.f;
@@ -289,7 +387,7 @@ void TransformTool::press(Document& doc, float x, float y, MouseButton btn) {
   markWholeDocDirty(doc);
 }
 
-void TransformTool::move(Document& doc, float x, float y) {
+void TransformTool::move(Document& /*doc*/, float x, float y) {
   if (!active_ || !dragging_) return;
   const float dx = x - dragStartX_;
   const float dy = y - dragStartY_;
@@ -299,15 +397,11 @@ void TransformTool::move(Document& doc, float x, float y) {
     case DragMode::Translate: {
       centerX_ = dragStartCenterX_ + dx;
       centerY_ = dragStartCenterY_ + dy;
-      // Pivot rides along with the whole transform on translate.
       pivotX_ = dragStartPivotX_ + dx;
       pivotY_ = dragStartPivotY_ + dy;
       break;
     }
     case DragMode::Rotate: {
-      // Angle reference is the pivot (not the bbox center) so rotation
-      // feels anchored at the visible handle. Shift snaps the *delta*, so a
-      // drag that started at a non-multiple stays consistent.
       const float a0 = std::atan2(dragStartY_ - dragStartPivotY_,
                                    dragStartX_ - dragStartPivotX_);
       const float a1 =
@@ -321,9 +415,6 @@ void TransformTool::move(Document& doc, float x, float y) {
     }
     case DragMode::Scale: {
       if (dragCorner_ < 0) break;
-      // Un-rotate the doc-space vector (cursor - pivot) back into the
-      // pre-rotation frame; divide by the grabbed corner's captured local
-      // coords to get the new per-axis scale.
       const float c = std::cos(dragStartAngle_);
       const float s = std::sin(dragStartAngle_);
       const float vx = x - dragStartPivotX_;
@@ -349,8 +440,6 @@ void TransformTool::move(Document& doc, float x, float y) {
       if (std::fabs(newSy) < kMinScale)
         newSy = (newSy < 0.f ? -kMinScale : kMinScale);
       if (shift) {
-        // Shift locks Y magnitude to X; Y sign is preserved so flipping
-        // across the pivot still works.
         newSy = std::copysign(std::fabs(newSx), newSy);
       }
       scaleX_ = newSx;
@@ -358,9 +447,6 @@ void TransformTool::move(Document& doc, float x, float y) {
       break;
     }
     case DragMode::Pivot: {
-      // Pivot drag moves only `pivotX_/Y_`; scale/rotate/center are
-      // untouched. rebuildScratch picks up the new rotation center on the
-      // next mouse move after release.
       pivotX_ = dragStartPivotX_ + dx;
       pivotY_ = dragStartPivotY_ + dy;
       break;
@@ -369,7 +455,6 @@ void TransformTool::move(Document& doc, float x, float y) {
       break;
   }
   rebuildScratch();
-  (void)doc;
   dirty_ = {0, 0, docW_, docH_};
 }
 

@@ -339,4 +339,104 @@ TEST(transform_pending_commit_writes_through_apply) {
   CHECK(approxEqual(layer->image.getPixel(40, 40), kGreen, 1e-4f));
 }
 
+// ---------- M10-S1: multi-source Free Transform ----------
+
+TEST(transform_enter_captures_all_selected_pixel_layers) {
+  Document doc(200, 200);
+  auto* a = addSolidLayer(doc, 20, 20, kRed, 10, 10, "A");
+  auto* b = addSolidLayer(doc, 30, 30, kGreen, 60, 60, "B");
+  doc.setSelectedLayerIds({a->id, b->id});
+
+  TransformTool t;
+  CHECK(t.enter(doc));
+  CHECK(t.isActive());
+  CHECK_EQ(t.sourceCount(), std::size_t{2});
+  // Bbox-union spans (10..90, 10..90); center is (50, 50).
+  CHECK_NEAR(t.centerX(), 50.0, 1e-4);
+  CHECK_NEAR(t.centerY(), 50.0, 1e-4);
+}
+
+TEST(transform_multi_select_translate_shifts_all_origins) {
+  Document doc(400, 400);
+  auto* a = addSolidLayer(doc, 20, 20, kRed, 10, 10, "A");
+  auto* b = addSolidLayer(doc, 20, 20, kGreen, 100, 100, "B");
+  doc.setSelectedLayerIds({a->id, b->id});
+
+  TransformTool t;
+  CHECK(t.enter(doc));
+  // Bbox-union spans (10..120, 10..120); center is (65, 65). Setting
+  // the new center to (75, 50) is a delta of (+10, -15), applied to
+  // every source.
+  t.setTranslation(75.f, 50.f);
+
+  auto cs = t.commits();
+  CHECK_EQ(static_cast<int>(cs.size()), 2);
+  for (const auto& c : cs) {
+    if (c.layerId == a->id) {
+      CHECK_EQ(c.beforeX, 10);
+      CHECK_EQ(c.beforeY, 10);
+      CHECK_EQ(c.afterX, 20);   // +10
+      CHECK_EQ(c.afterY, -5);   // -15
+      CHECK_EQ(c.after.width(), 20);
+      CHECK_EQ(c.after.height(), 20);
+    } else if (c.layerId == b->id) {
+      CHECK_EQ(c.beforeX, 100);
+      CHECK_EQ(c.beforeY, 100);
+      CHECK_EQ(c.afterX, 110);
+      CHECK_EQ(c.afterY, 85);
+    }
+  }
+}
+
+TEST(transform_multi_select_scale_resizes_each_source_about_union_center) {
+  Document doc(400, 400);
+  auto* a = addSolidLayer(doc, 20, 20, kRed, 10, 10, "A");     // doc rect (10..30,10..30)
+  auto* b = addSolidLayer(doc, 20, 20, kGreen, 50, 50, "B");   // doc rect (50..70,50..70)
+  doc.setSelectedLayerIds({a->id, b->id});
+
+  TransformTool t;
+  CHECK(t.enter(doc));
+  // Bbox-union (10..70, 10..70), center (40, 40). Scale 2× around it.
+  t.setScale(2.f, 2.f);
+
+  auto cs = t.commits();
+  CHECK_EQ(static_cast<int>(cs.size()), 2);
+  // Each source's content rect transforms through scale-around-union-
+  // center: corner_doc' = pivot + 2*(corner_doc - pivot). With pivot=
+  // (40,40), A's rect (10..30,10..30) maps to (-20..20, -20..20) — a
+  // 40×40 box at origin (-20, -20). B's (50..70) maps to (60..100) — a
+  // 40×40 box at origin (60, 60).
+  for (const auto& c : cs) {
+    CHECK_EQ(c.after.width(), 40);
+    CHECK_EQ(c.after.height(), 40);
+    if (c.layerId == a->id) {
+      CHECK_EQ(c.afterX, -20);
+      CHECK_EQ(c.afterY, -20);
+    } else if (c.layerId == b->id) {
+      CHECK_EQ(c.afterX, 60);
+      CHECK_EQ(c.afterY, 60);
+    }
+  }
+}
+
+TEST(transform_multi_select_overlay_emits_one_override_per_source) {
+  Document doc(200, 200);
+  auto* a = addSolidLayer(doc, 20, 20, kRed, 10, 10, "A");
+  auto* b = addSolidLayer(doc, 20, 20, kGreen, 60, 60, "B");
+  doc.setSelectedLayerIds({a->id, b->id});
+
+  TransformTool t;
+  CHECK(t.enter(doc));
+  auto o = t.overlay();
+  CHECK(o.active);
+  CHECK_EQ(static_cast<int>(o.overrides.size()), 2);
+  // Each override is non-null.
+  for (const auto& ov : o.overrides) {
+    CHECK(ov.image != nullptr);
+    CHECK(ov.layerId != 0);
+  }
+  // Legacy `o.layer` is the first override.
+  CHECK(o.layer.image == o.overrides[0].image);
+}
+
 int main() { return tuxels::testing::run(); }

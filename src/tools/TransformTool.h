@@ -2,6 +2,7 @@
 
 #include <array>
 #include <optional>
+#include <vector>
 
 #include "compositor/compose.h"
 #include "core/TuxImage.h"
@@ -12,22 +13,21 @@ namespace tuxels {
 
 class Document;
 
-// Modal Free-Transform tool.
+// Modal Free-Transform tool. M10-S1: now multi-source — collects every
+// PixelLayer from `Document::selectedLayerIds()` (falls back to the active
+// layer when no multi-selection is active). All sources transform around
+// a SHARED bbox-union frame in doc coords; per-source scratch + override
+// during the live drag; commit returns one PendingCommit per source.
 //
-// enter() latches the active pixel layer as the transform source and
-// initializes an identity transform centered on the layer's doc bbox.
-// While the tool is active, translation/rotation/uniform-scale around the
-// bbox center are exposed both as direct setters (for tests and keyboard
-// nudges later) and as drag gestures against 4 corner handles (scale), the
-// bbox interior (translate), and the region outside the bbox (rotate).
+// enter() captures all pixel sources, computes the bbox-union, and seeds
+// an identity transform centered on the union's center. While the tool
+// is active, translation/rotation/uniform-scale exposed via direct
+// setters and drag gestures (corners, interior, exterior, pivot) — same
+// gesture vocabulary as the single-source M2 version.
 //
-// The live preview is produced by resampling the captured source into a
-// `scratch_` image sized to the transformed doc-bbox AABB, served via
-// `overlay()` for CanvasView to feed to compose() as a LayerOverride.
-//
-// commit() returns a PendingCommit with the before/after TuxImages and
-// origins that MainWindow wraps in a TransformCommand. cancel() discards
-// the in-progress transform without touching the real layer.
+// Backward compat: tests + the existing `Overlay::layer` / `commit()`
+// surface keep working when there's exactly one source. New
+// `Overlay::overrides` / `commits()` expose the full vector.
 class TransformTool : public ToolBase {
  public:
   struct PendingCommit {
@@ -42,19 +42,24 @@ class TransformTool : public ToolBase {
 
   struct Overlay {
     bool active = false;
+    // Legacy: first source's override (kept for the existing test surface).
     LayerOverride layer;
-    // Corners in doc-space, order TL, TR, BR, BL. Used by CanvasView to
-    // draw the bbox + handle dots.
+    // Full set of overrides — one per source. Length matches `sources_`.
+    std::vector<LayerOverride> overrides;
+    // Bbox-union corners after the current transform, in doc coords.
+    // Order: TL, TR, BR, BL.
     std::array<std::array<float, 2>, 4> corners{};
-    // Rotation/scale pivot in doc-space. CanvasView paints a crosshair here
-    // when `active` is true.
+    // Rotation/scale pivot in doc coords.
     std::array<float, 2> pivot{};
   };
 
   TransformTool() = default;
 
   bool enter(Document& doc);
+  // Legacy commit: returns nullopt if no sources, the first PendingCommit
+  // otherwise. Use `commits()` to drain all sources.
   std::optional<PendingCommit> commit();
+  std::vector<PendingCommit> commits();
   void cancel();
   bool isActive() const noexcept { return active_; }
 
@@ -71,6 +76,7 @@ class TransformTool : public ToolBase {
   float rotation() const noexcept { return angle_; }
   float pivotX() const noexcept { return pivotX_; }
   float pivotY() const noexcept { return pivotY_; }
+  std::size_t sourceCount() const noexcept { return sources_.size(); }
 
   Overlay overlay() const;
 
@@ -88,42 +94,51 @@ class TransformTool : public ToolBase {
  private:
   enum class DragMode { None, Translate, Rotate, Scale, Pivot };
 
+  // Per-layer source state captured at enter().
+  struct Source {
+    LayerId layerId = 0;
+    TuxImage src;
+    int srcOriginX = 0;
+    int srcOriginY = 0;
+    int srcW = 0;
+    int srcH = 0;
+    TuxImage scratch;
+    int scratchOriginX = 0;
+    int scratchOriginY = 0;
+  };
+
   void rebuildScratch();
+  void rebuildScratchFor(Source& s) const;
   void markWholeDocDirty(const Document& doc);
-  std::array<std::array<float, 2>, 4> computeCorners() const;
+  std::array<std::array<float, 2>, 4> computeOuterCorners() const;
   bool pointInQuad(float x, float y,
                    const std::array<std::array<float, 2>, 4>& q) const;
   int nearestCornerWithin(float x, float y, float maxDocDist) const;
 
   bool active_ = false;
-  LayerId layerId_ = 0;
-  TuxImage src_;
-  int srcW_ = 0;
-  int srcH_ = 0;
-  int srcOriginX_ = 0;
-  int srcOriginY_ = 0;
+  std::vector<Source> sources_;
 
-  // Transform state, always interpreted relative to srcCenter=(srcW/2,srcH/2).
+  // Bbox-union of all sources' content rects in doc coords, captured at
+  // enter() time. Constant for the lifetime of the modal session.
+  int outerOriginX_ = 0;
+  int outerOriginY_ = 0;
+  int outerW_ = 0;
+  int outerH_ = 0;
+
+  // Transform state, in doc coords. Centered on the bbox-union center
+  // initially.
   float centerX_ = 0.f;
   float centerY_ = 0.f;
   float scaleX_ = 1.f;
   float scaleY_ = 1.f;
   float angle_ = 0.f;
-  // Rotation + scale pivot in doc-space. Initialized to the bbox center on
-  // `enter`, tracks along with `centerX_/Y_` on translate, and can be moved
-  // independently via the pivot drag gesture.
   float pivotX_ = 0.f;
   float pivotY_ = 0.f;
-
-  // Scratch preview + its doc-space origin.
-  TuxImage scratch_;
-  int scratchOriginX_ = 0;
-  int scratchOriginY_ = 0;
 
   // Drag state.
   bool dragging_ = false;
   DragMode dragMode_ = DragMode::None;
-  int dragCorner_ = -1;  // which of the 4 corners, for scale.
+  int dragCorner_ = -1;
   float dragStartX_ = 0.f;
   float dragStartY_ = 0.f;
   float dragStartCenterX_ = 0.f;
@@ -133,8 +148,8 @@ class TransformTool : public ToolBase {
   float dragStartScaleY_ = 1.f;
   float dragStartPivotX_ = 0.f;
   float dragStartPivotY_ = 0.f;
-  // For Scale drags: the grabbed corner's pre-scale local coords at drag
-  // start (pre-rotation frame, relative to pivot). newScale = u / dragStartLocal.
+  // For Scale drags: the grabbed corner's pre-scale local coords (pre-
+  // rotation frame, relative to pivot). newScale = u / dragStartLocal.
   float dragStartLocalX_ = 0.f;
   float dragStartLocalY_ = 0.f;
 

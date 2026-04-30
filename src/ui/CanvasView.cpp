@@ -333,32 +333,34 @@ void CanvasView::recomposite() {
   if (composite_.width() != doc_->width() || composite_.height() != doc_->height()) {
     composite_ = TuxImage(doc_->width(), doc_->height());
   }
-  LayerOverride ov;
-  const LayerOverride* ovp = nullptr;
+  // M10-S1: pass the full overrides vector — Free Transform on multi-
+  // select carries one override per source.
+  std::vector<LayerOverride> ovs;
   if (transformTool_) {
     auto o = transformTool_->overlay();
-    if (o.active) { ov = o.layer; ovp = &ov; }
+    if (o.active) ovs = std::move(o.overrides);
   }
-  compose(doc_->tree(), composite_, ovp);
+  compose(doc_->tree(), composite_,
+          std::span<const LayerOverride>(ovs.data(), ovs.size()));
   ensureCacheImage(composite_.bounds());
 }
 
 void CanvasView::recompositePartial(Rect pixelRect) {
   if (!doc_ || doc_->width() <= 0 || doc_->height() <= 0) return;
   if (pixelRect.isEmpty()) return;
-  LayerOverride ov;
-  const LayerOverride* ovp = nullptr;
+  std::vector<LayerOverride> ovs;
   if (transformTool_) {
     auto o = transformTool_->overlay();
-    if (o.active) { ov = o.layer; ovp = &ov; }
+    if (o.active) ovs = std::move(o.overrides);
   }
+  std::span<const LayerOverride> ovSpan(ovs.data(), ovs.size());
   if (composite_.width() != doc_->width() || composite_.height() != doc_->height()) {
     composite_ = TuxImage(doc_->width(), doc_->height());
-    compose(doc_->tree(), composite_, ovp);
+    compose(doc_->tree(), composite_, ovSpan);
     ensureCacheImage(composite_.bounds());
     return;
   }
-  compose(doc_->tree(), composite_, pixelRect, ovp);
+  compose(doc_->tree(), composite_, pixelRect, ovSpan);
   ensureCacheImage(pixelRect);
 }
 
