@@ -17,6 +17,7 @@ class BrushTool;
 class BucketTool;
 class CanvasView;
 class CropTool;
+class EyedropperTool;
 class LassoTool;
 class LayerBase;
 class LayersPanel;
@@ -135,6 +136,7 @@ class MainWindow : public QMainWindow {
   std::unique_ptr<LassoTool> lassoTool_;
   std::unique_ptr<PolyLassoTool> polyLassoTool_;
   std::unique_ptr<SelectByColorTool> selectByColorTool_;
+  std::unique_ptr<EyedropperTool> eyedropperTool_;
   std::unique_ptr<UndoStack> undoStack_;
   CanvasView* canvas_ = nullptr;
   LayersPanel* layersPanel_ = nullptr;

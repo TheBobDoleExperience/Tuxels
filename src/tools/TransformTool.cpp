@@ -361,8 +361,6 @@ void TransformTool::press(Document& doc, float x, float y, MouseButton btn) {
   // is `(cornerX_initialDoc - pivotX, cornerY_initialDoc - pivotY)` in
   // the bbox-center frame.
   if (mode == DragMode::Scale && corner >= 0) {
-    const float bboxCx = outerOriginX_ + outerW_ * 0.5f;
-    const float bboxCy = outerOriginY_ + outerH_ * 0.5f;
     const float cornerInitX[4] = {static_cast<float>(outerOriginX_),
                                    static_cast<float>(outerOriginX_ + outerW_),
                                    static_cast<float>(outerOriginX_ + outerW_),

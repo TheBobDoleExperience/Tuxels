@@ -55,6 +55,11 @@ class CanvasView : public QWidget {
   void setZoom(double z);
   QPointF pan() const noexcept { return pan_; }
 
+  // M11-S1: sample the cached composite at doc coords (clamped to image
+  // bounds). Returns transparent for out-of-range. Used by the
+  // Eyedropper tool.
+  Rgba32F sampleComposite(int docX, int docY) const;
+
  signals:
   void zoomChanged(double z);
   void layerPainted();

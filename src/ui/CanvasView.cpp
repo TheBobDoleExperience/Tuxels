@@ -194,6 +194,10 @@ QCursor CanvasView::cursorForTool(ToolId id) {
       // Reuse the wand pixmap — Photoshop groups them and users expect
       // the same cursor shape.
       return makeWandCursor();
+    case ToolId::Eyedropper:
+      // PointingHand cursor approximates the eyedropper affordance
+      // without bundling a custom pixmap.
+      return QCursor(Qt::PointingHandCursor);
   }
   return QCursor(Qt::ArrowCursor);
 }
@@ -326,6 +330,13 @@ void CanvasView::setZoom(double z) {
   zoom_ = z;
   emit zoomChanged(zoom_);
   update();
+}
+
+Rgba32F CanvasView::sampleComposite(int x, int y) const {
+  if (composite_.width() <= 0 || composite_.height() <= 0) {
+    return Rgba32F::transparent();
+  }
+  return composite_.getPixel(x, y);
 }
 
 void CanvasView::recomposite() {

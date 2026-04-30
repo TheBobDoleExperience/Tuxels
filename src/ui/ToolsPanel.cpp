@@ -44,6 +44,7 @@ QString toolKey(ToolId id) {
     case ToolId::Brush: return QStringLiteral("Brush");
     case ToolId::Bucket: return QStringLiteral("Bucket");
     case ToolId::Transform: return QStringLiteral("Transform");
+    case ToolId::Eyedropper: return QStringLiteral("Eyedropper");
   }
   return QStringLiteral("Unknown");
 }
@@ -694,6 +695,13 @@ void ToolsPanel::swapColors() {
 void ToolsPanel::resetColors() {
   fg_ = Qt::black;
   bg_ = Qt::white;
+  updateSwatchColors();
+  applyFgToBrush();
+}
+
+void ToolsPanel::setForegroundColor(const QColor& c) {
+  if (!c.isValid()) return;
+  fg_ = c;
   updateSwatchColors();
   applyFgToBrush();
 }

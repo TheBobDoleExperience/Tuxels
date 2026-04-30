@@ -73,6 +73,10 @@ class ToolsPanel : public QDockWidget {
  public slots:
   void swapColors();
   void resetColors();
+  // M11-S1: setter used by the Eyedropper tool (and possibly future
+  // color-picking flows). Updates fg + applies to brush + repaints
+  // the swatch.
+  void setForegroundColor(const QColor& c);
 
  private slots:
   void onFgSwatchClicked();

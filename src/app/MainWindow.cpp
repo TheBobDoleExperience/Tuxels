@@ -10,6 +10,7 @@
 #include <QMessageBox>
 #include <QStatusBar>
 #include <algorithm>
+#include <cmath>
 #include <set>
 
 #include "compositor/compose.h"
@@ -40,6 +41,7 @@
 #include "tools/LassoTool.h"
 #include "tools/MagicWandTool.h"
 #include "tools/MarqueeTool.h"
+#include "tools/EyedropperTool.h"
 #include "tools/MoveTool.h"
 #include "tools/PolyLassoTool.h"
 #include "tools/SelectByColorTool.h"
@@ -66,6 +68,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   lassoTool_ = std::make_unique<LassoTool>();
   polyLassoTool_ = std::make_unique<PolyLassoTool>();
   selectByColorTool_ = std::make_unique<SelectByColorTool>();
+  eyedropperTool_ = std::make_unique<EyedropperTool>();
+  // M11-S1: wire the eyedropper's pick callback. Reads the cached
+  // composite at the click's doc-coord position and pushes the color
+  // into ToolsPanel::setForegroundColor.
+  eyedropperTool_->setOnPick([this](float x, float y) {
+    if (!canvas_) return;
+    Rgba32F c = canvas_->sampleComposite(static_cast<int>(std::floor(x)),
+                                          static_cast<int>(std::floor(y)));
+    if (c.a <= 0.f) return;  // sampling transparent area is a no-op
+    if (toolsPanel_) {
+      QColor qc = QColor::fromRgbF(std::clamp(c.r, 0.f, 1.f),
+                                    std::clamp(c.g, 0.f, 1.f),
+                                    std::clamp(c.b, 0.f, 1.f),
+                                    std::clamp(c.a, 0.f, 1.f));
+      toolsPanel_->setForegroundColor(qc);
+    }
+  });
   undoStack_ = std::make_unique<UndoStack>(/*maxDepth=*/64);
 
   canvas_ = new CanvasView(this);
@@ -304,6 +323,13 @@ void MainWindow::buildMenus() {
   connect(pickLasso, &QAction::triggered, this,
           [this]() { setActiveTool(ToolId::Lasso); });
   addAction(pickLasso);
+
+  // M11-S1: Eyedropper — PS keyboard 'I'.
+  auto* pickEyedropper = new QAction(this);
+  pickEyedropper->setShortcut(QKeySequence(tr("I")));
+  connect(pickEyedropper, &QAction::triggered, this,
+          [this]() { setActiveTool(ToolId::Eyedropper); });
+  addAction(pickEyedropper);
 
   // Enter / Escape — transform accept / cancel. Guarded inside the handler
   // so they're no-ops unless the TransformTool is active; normal typing is
@@ -2011,6 +2037,9 @@ void MainWindow::setActiveTool(ToolId id) {
       break;
     case ToolId::SelectByColor:
       if (canvas_) canvas_->setTool(selectByColorTool_.get());
+      break;
+    case ToolId::Eyedropper:
+      if (canvas_) canvas_->setTool(eyedropperTool_.get());
       break;
   }
   if (canvas_) canvas_->setToolCursor(CanvasView::cursorForTool(id));

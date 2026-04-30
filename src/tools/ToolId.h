@@ -13,6 +13,7 @@ enum class ToolId {
   Lasso,
   PolyLasso,
   SelectByColor,
+  Eyedropper,
 };
 
 }  // namespace tuxels
