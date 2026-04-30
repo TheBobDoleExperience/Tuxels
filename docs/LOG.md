@@ -703,3 +703,61 @@ End of session: 5 milestones shipped (M5 push + M6 + M7 + M8 + M9),
 24 commits on main, 41 executables / 403 internal cases (up from
 M5's 37 / 364). Free Transform on multi-select remains the #1
 deferred item; M10 is its natural home.
+
+## 2026-04-30 (continued)
+
+### M10 — Free Transform on multi-select ✅ shipped
+
+Continuing the autonomous run, M10 finally tackles the deferred-
+since-M7 architectural item — Free Transform on multi-select.
+
+- **M10-S0** (`25dd3d0`). compose() generalized to accept
+  `std::span<const LayerOverride>`. Internal Ctx::override becomes
+  a span; per-pixel-layer dispatch uses a new findOverride helper
+  (first match wins). Single-pointer overloads kept as thin
+  wrappers building 0/1-element spans for backward compat. nullptr
+  path = empty span = bitwise identical to pre-M10.
+
+- **M10-S1+S2** (`fad8eff`). TransformTool refactored to multi-
+  source. `enter()` collects every PixelLayer from
+  `selectedLayerIds()` into a `vector<Source>`; bbox-union of all
+  sources' doc rects is the shared transform frame. New
+  `buildDocToDoc(centerX, centerY, pivotX, pivotY, sx, sy, angle,
+  bboxCx, bboxCy)` is the doc → doc transform applied uniformly.
+  `rebuildScratchFor(Source&)` applies it to each source's corners,
+  AABBs, allocates per-source scratch, resamples. Legacy `commit()`
+  returns optional<PendingCommit> of the first source for the
+  existing test surface; new `commits()` returns the full vector.
+  `Overlay::layer` mirrors overrides[0]; `Overlay::overrides` is
+  the new vector. CanvasView passes the full vector via M10-S0's
+  span overloads. MainWindow's commitTransformIfActive dispatches:
+  size==1 → single TransformCommand (preserves readable label),
+  size>1 → LayerOpCommand iterating over per-source records.
+
+- **M10-S3** (this commit). STATUS / NEXT / ARCHITECTURE / LOG
+  updated. Tag `v0.10.0-m10` + push.
+
+End of session: 6 milestones shipped autonomously (M5 push + M6 +
+M7 + M8 + M9 + M10), 27 commits on main, 41 executables / 407
+internal cases (up from M5's 37 / 364 — that's +4 executables and
++43 internal cases across this session).
+
+Cumulative deferred-list cleared:
+  - Multi-select Move (M7-S0) ✓
+  - Up/Down crossing groups (M7-S1) ✓
+  - Group properties pane (M6-S0) ✓
+  - D&D layer reorder + drop-into-group (M6-S1) ✓
+  - Multi-select with batch ops (M6-S2) ✓
+  - Tablet pressure (M8-S1) ✓
+  - Drop indicator polish (M7-S2) ✓
+  - ToolsPanel persistence (M7-S3) ✓
+  - Layer Duplicate (M7-S4) ✓
+  - Rename + context menu (M7-S5/S6) ✓
+  - Color labels (M8-S0) ✓
+  - Rasterize Layer (M8-S2) ✓
+  - Merge Down (M9-S0) ✓
+  - Free Transform on multi-select (M10-S1+S2) ✓
+
+Remaining big-ticket items (M11+): PSD import (read-only),
+Smart Objects, Layer effects (drop shadow / glow / stroke), Text
+layers, Performance pass.
