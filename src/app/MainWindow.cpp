@@ -46,6 +46,7 @@
 #include "ui/CanvasView.h"
 #include "ui/LayersPanel.h"
 #include "ui/PropertiesDock.h"
+#include "ui/PropertiesPaneGroup.h"
 #include "ui/ToolsPanel.h"
 
 namespace tuxels {
@@ -430,6 +431,28 @@ void MainWindow::buildDocks() {
                     BrightnessContrast, BrightnessContrastParams>>(
                     layer, before, after, setter,
                     "Edit Brightness/Contrast"));
+            if (canvas_) canvas_->requestRecomposite();
+          });
+  // M6-S0: group properties commit. Setter applies all four fields
+  // atomically. The pane has already mutated the layer to `after` state
+  // before this fires; pushing the command preserves the diff for undo.
+  connect(propertiesDock_, &PropertiesDock::groupCommitRequested, this,
+          [this](GroupLayer* layer, GroupProperties before,
+                 GroupProperties after) {
+            if (!layer) return;
+            auto setter = [](GroupLayer* g, const GroupProperties& p) {
+              g->name = p.name;
+              g->blend = p.blend;
+              g->opacity = p.opacity;
+              g->clipToBelow = p.clipToBelow;
+            };
+            undoStack_->push(
+                std::make_unique<LayerParamsCommand<GroupLayer, GroupProperties>>(
+                    layer, before, after, setter, "Edit Group Properties"));
+            // Layer-row chevron + name + indent depend on these fields,
+            // and a blend transition between Pass-Through and isolated
+            // re-shuffles compose. Refresh the panel + canvas.
+            if (layersPanel_) layersPanel_->refresh();
             if (canvas_) canvas_->requestRecomposite();
           });
 }
@@ -1511,11 +1534,11 @@ void MainWindow::bindActiveAdjustmentToDock() {
     propertiesDock_->bindNothing();
     return;
   }
-  // Groups have no Properties pane in M5 — punted to M6 (group color
-  // labels, isolation flag, etc.). Make the arm explicit so future
-  // group-properties work has an obvious home.
+  // M6-S0: groups bind to their own properties pane (name + blend +
+  // opacity + clip-to-below). Static cast is safe because `kind() == Group`
+  // implies the runtime type.
   if (layer->kind() == LayerKind::Group) {
-    propertiesDock_->bindNothing();
+    propertiesDock_->bindGroup(static_cast<GroupLayer*>(layer));
     return;
   }
   if (auto* levels = dynamic_cast<LevelsAdjustment*>(layer)) {

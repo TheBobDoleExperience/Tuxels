@@ -7,6 +7,7 @@
 
 #include "ui/PropertiesPaneBrightnessContrast.h"
 #include "ui/PropertiesPaneCurves.h"
+#include "ui/PropertiesPaneGroup.h"
 #include "ui/PropertiesPaneHueSat.h"
 #include "ui/PropertiesPaneLevels.h"
 
@@ -67,6 +68,14 @@ PropertiesDock::PropertiesDock(QWidget* parent)
           &PropertiesDock::brightnessContrastCommitRequested);
   stack_->addWidget(brightnessContrastPane_);
 
+  // Page 5 — Group pane (M6-S0).
+  groupPane_ = new PropertiesPaneGroup(stack_);
+  connect(groupPane_, &PropertiesPaneGroup::previewChanged, this,
+          &PropertiesDock::previewChanged);
+  connect(groupPane_, &PropertiesPaneGroup::commitRequested, this,
+          &PropertiesDock::groupCommitRequested);
+  stack_->addWidget(groupPane_);
+
   setWidget(stack_);
   bindNothing();
 }
@@ -91,11 +100,17 @@ void PropertiesDock::bindBrightnessContrast(BrightnessContrast* layer) {
   stack_->setCurrentWidget(brightnessContrastPane_);
 }
 
+void PropertiesDock::bindGroup(GroupLayer* layer) {
+  groupPane_->bind(layer);
+  stack_->setCurrentWidget(groupPane_);
+}
+
 void PropertiesDock::bindNothing() {
   levelsPane_->unbind();
   curvesPane_->unbind();
   hueSatPane_->unbind();
   brightnessContrastPane_->unbind();
+  groupPane_->unbind();
   stack_->setCurrentWidget(emptyPage_);
 }
 

@@ -81,6 +81,8 @@ add_executable(tuxels
   src/ui/PropertiesPaneBrightnessContrast.cpp
   src/ui/PropertiesPaneCurves.h
   src/ui/PropertiesPaneCurves.cpp
+  src/ui/PropertiesPaneGroup.h
+  src/ui/PropertiesPaneGroup.cpp
   src/ui/PropertiesPaneHueSat.h
   src/ui/PropertiesPaneHueSat.cpp
   src/ui/PropertiesPaneLevels.h
@@ -187,6 +189,10 @@ tuxels_add_qt_test(test_properties_pane_smaller
   src/ui/PropertiesPaneHueSat.cpp
   src/ui/PropertiesPaneBrightnessContrast.h
   src/ui/PropertiesPaneBrightnessContrast.cpp
+)
+tuxels_add_qt_test(test_properties_pane_group
+  src/ui/PropertiesPaneGroup.h
+  src/ui/PropertiesPaneGroup.cpp
 )
 tuxels_add_qt_test(test_layers_panel_groups
   src/ui/LayerRowWidget.h

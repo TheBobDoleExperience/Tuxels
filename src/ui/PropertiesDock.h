@@ -6,8 +6,10 @@
 #include "core/Histogram.h"
 #include "layers/BrightnessContrast.h"
 #include "layers/CurvesAdjustment.h"
+#include "layers/GroupLayer.h"
 #include "layers/HueSaturation.h"
 #include "layers/LevelsAdjustment.h"
+#include "ui/PropertiesPaneGroup.h"
 
 class QStackedWidget;
 class QWidget;
@@ -17,6 +19,7 @@ namespace tuxels {
 class LayerBase;
 class PropertiesPaneBrightnessContrast;
 class PropertiesPaneCurves;
+class PropertiesPaneGroup;
 class PropertiesPaneHueSat;
 class PropertiesPaneLevels;
 
@@ -45,6 +48,9 @@ class PropertiesDock : public QDockWidget {
   void bindHueSat(HueSaturation* layer);
   // Bind Brightness/Contrast (M4-S4). No histogram.
   void bindBrightnessContrast(BrightnessContrast* layer);
+  // Bind a Group layer (M6-S0). Exposes name + blend + opacity + clip-to-
+  // below in a single pane. No histogram.
+  void bindGroup(GroupLayer* layer);
   // Show the empty state. Called when the active layer is null or non-
   // adjustment.
   void bindNothing();
@@ -67,6 +73,10 @@ class PropertiesDock : public QDockWidget {
   void brightnessContrastCommitRequested(BrightnessContrast* layer,
                                           BrightnessContrastParams before,
                                           BrightnessContrastParams after);
+  // Re-emitted from PropertiesPaneGroup on commit-on-release (M6-S0).
+  // MainWindow wraps in a `LayerParamsCommand<GroupLayer, GroupProperties>`.
+  void groupCommitRequested(GroupLayer* layer, GroupProperties before,
+                            GroupProperties after);
 
  private:
   QStackedWidget* stack_ = nullptr;
@@ -75,6 +85,7 @@ class PropertiesDock : public QDockWidget {
   PropertiesPaneCurves* curvesPane_ = nullptr;
   PropertiesPaneHueSat* hueSatPane_ = nullptr;
   PropertiesPaneBrightnessContrast* brightnessContrastPane_ = nullptr;
+  PropertiesPaneGroup* groupPane_ = nullptr;
 };
 
 }  // namespace tuxels
