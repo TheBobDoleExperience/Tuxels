@@ -266,7 +266,47 @@ Exclusion:    C = Cs + Cd - 2*Cs*Cd
   - **Delete** filters descendants of selected ancestors (so deleting a group doesn't double-delete its children — the unique_ptr ownership chain transitively destroys them as part of the parent's stash). Each survivor is removed in iteration order with a fresh `tree.locate(id)`; the (parentId, idx, ptr) tuple is captured at TIME OF removal (post-prior-removals). Undo reverses the stash and re-inserts at recorded slots — works because reverse undo replays in matching order so each insert lands in a then-current tree state where the recorded slot is valid.
   - **Group** walks `tree.flatten()` to collect filtered ids in bottom-up tree order. Each removal updates the captured "topmost slot"; the new GroupLayer lands at the last captured (parent, idx) so it occupies the topmost selected layer's position. Children land in bottom-up tree order. Undo pulls the group out, drops its children, and re-inserts each at recorded slot in reverse.
   - **Visibility** captures per-layer `oldVal` so undo restores mixed prior states correctly (PS-style: setting all to `newVal` may restore some to true and others to false on undo).
-- **Tools stay single-active.** Move / Transform / Free Transform / Paint / Marquee etc. consume `activeLayer()` only for M6. Multi-active tool semantics (Move on bbox-union, Transform on bbox-union, etc.) are scoped out — see `docs/NEXT.md` M7 candidate #1.
+- **Tools stay single-active.** Move / Transform / Free Transform / Paint / Marquee etc. consume `activeLayer()` only for M6. M7-S0 added Move-on-multi-select; Transform / Free Transform are M8 candidates.
+
+## 18. Move Tool on Multi-Select (M7-S0)
+
+- `MoveTool::press` collects every `PixelLayer` from `Document::selectedLayerIds()` (falling back to the active layer when no multi-selection is active). Per-layer drag state captured in a `vector<DragLayer>` (each entry: id, beforeOrigin, layer dims). Non-pixel layers (groups, adjustments) are skipped silently.
+- `move()` applies the same `(dx, dy)` delta to every captured layer's origin in real-time; dirty-rect math unions per-layer (before, after) doc rects so the partial recomposite covers everything that changed in one shot.
+- `release()` latches one `PendingMove` per moved layer. API change: `takeCommit()` returning `optional<PendingMove>` → `takeCommits()` returning `vector<PendingMove>`. MainWindow drains and dispatches: `size == 1` → `MoveLayerCommand` (preserves the readable label); `size > 1` → `LayerOpCommand` whose closures iterate over the move list (one undo entry covers the whole batch).
+
+## 19. Up/Down Crossing Group Boundaries (M7-S1)
+
+- `MainWindow::onLayerMoveUp/Down` detect "at top of group" / "at bottom of group" and pop the active layer OUT into the parent scope:
+  - **Up at top of group** → target = `(group's parent, group's idx + 1)` → layer lands directly above the group in the panel.
+  - **Down at bottom of group** → target = `(group's parent, group's idx)` → layer lands directly below the group in the panel.
+- Cascades through nested groups: each Ctrl+] pops one level. At root top/bottom the existing `"Already at top of stack"` / `"Already at bottom of stack"` status messages stay.
+- Cross-scope moves use `tree.move(fromP, fromI, toP, toI)` with symmetric undo `tree.move(toP, toI, fromP, fromI)`. Active id preserved (id-keyed). Same-scope moves keep the existing single-parent path verbatim.
+
+## 20. Drop Indicator Visualization (M7-S2)
+
+- `LayerListWidget::dragMoveEvent` updates `hoverItem_` + `hoverZone_` and triggers `viewport()->update()` only when the state changes. `paintEvent` calls super then overlays via `QPainter(viewport())`.
+- **Group + middle zone:** tinted blue fill + 2px border around the row (the "drop INTO group" affordance). **Above:** thin green line at the row's top edge. **Below:** green line at the bottom edge. **Non-group + middle:** collapses to the same Below visual (the dispatch resolves it that way).
+- The 3-zone hit-test is factored into a `zoneAt()` private helper so dragMove + drop share one source of truth (the M6-S1 inline computation moved here).
+
+## 21. ToolsPanel Section Persistence (M7-S3)
+
+- Each `CollapsibleSection`'s expanded/collapsed state survives app restart via QSettings. ToolsPanel ctor calls `loadSectionStates()` at the end of construction; `addSection` wires every section's `chevronClicked` signal to `saveSectionState(id, expanded)`. **Save-on-toggle** (rather than save-at-exit) is robust to crashes and QSettings batches I/O so the per-click cost is negligible.
+- Stable string keys per `ToolId` (`Move`, `Marquee`, `Lasso`, `PolyLasso`, `MagicWand`, `SelectByColor`, `Crop`, `Brush`, `Bucket`, `Transform`) under `ToolsPanel/Section/<key>` — outlives enum-ordinal shifts.
+- `test_tools_panel` `main()` isolates the test's QSettings to a `QTemporaryDir` via `QSettings::setPath` so it doesn't pollute the user's real config.
+
+## 22. Layer Duplicate / Clone (M7-S4)
+
+- `src/layers/CloneLayer.{h,cpp}` houses polymorphic `cloneLayer(const LayerBase&, Document&)`. Dispatches on runtime type via `dynamic_cast`:
+  - **PixelLayer** — `deepCopyImage(src.image)` walks present tiles and clones each tile's contents (`tile->clone()`). The default `TuxImage` copy ctor only shares `shared_ptr<Tile>`s, so writes on the clone outside a `beginRecord`/`stopRecord` window would mutate the source's tiles. The deep copy is the only safe way to produce an independently-editable duplicate.
+  - **GroupLayer** — recursively clone each child; copies `isExpanded`.
+  - **Adjustment subclasses** (Levels, Curves, Hue/Saturation, Brightness/Contrast) — construct fresh + replay params via the public bulk setters (`setAllParams` / `setAllPoints` / `setParams`). `LayerBase`'s `unique_ptr<LayerMask>` deletes the implicit copy ctor, so direct copy-construct doesn't compile.
+- All clones receive a fresh `LayerId` via `Document::nextLayerId()` and the suffix `" copy"` appended to the source name. Common base fields (visible, opacity, blend, origin, clipToBelow, mask) are copied via `copyCommonBaseFields`; mask is deep-copied through the same `deepCopyImage` helper.
+- `MainWindow::onLayerDuplicate` (Ctrl+J) inserts the clone at (active's parent, active's idx + 1) — directly above active in the panel — and sets it as new active + sole-selected. Wrapped in `LayerOpCommand` whose closure stash holds the cloned subtree across undo/redo cycles.
+
+## 23. Layer-Row Rename + Context Menu (M7-S5/S6)
+
+- **In-place rename (M7-S5).** `LayerRowWidget` carries a hidden `QLineEdit` alongside the name `QLabel`. `eventFilter` catches `QEvent::MouseButtonDblClick` on the label → label hidden + edit shown + focus + select-all. `editingFinished` (Enter or focus-loss) commits via `commitNameEdit`; Escape (intercepted in eventFilter) reverts. Empty-string + equal-string commits short-circuit. `bindToLayer` drops any in-progress edit so panel rebuilds reusing rows don't carry stale state. New `nameChangeRequested(layer, oldName, newName)` signal; `MainWindow::onLayerNameChange` wraps the diff in a `LayerOpCommand` with id-keyed layer resolution.
+- **Context menu (M7-S6).** `LayerRowWidget::contextMenuEvent` opens a `QMenu` with: Duplicate Layer (Ctrl+J), Delete Layer, Rename Layer, Group Layer (non-groups only), Add Layer Mask (pixel without existing mask), and the existing Create / Release Clipping Mask toggle. Items conditionally shown by kind / mask state. Five new signals carry the row's bound layer; the panel relays each upward. **PS-style activation:** the MainWindow lambdas first set the row's layer active + replace `Document::selectedLayerIds_` with `{layer}`, then reuse the existing global-action slots. Rename routes through new `LayerRowWidget::beginRename()` public helper + `LayersPanel::beginRenameForLayer(LayerId)` so the menu opens the same in-place edit the double-click does.
 
 ---
 

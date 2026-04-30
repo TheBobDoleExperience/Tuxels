@@ -570,3 +570,80 @@ moved item to a position that, when N stays constant, equals the
 caller's intended final idx. This is documented in LayerTree.h's
 move comment but the equivalence is non-obvious; M6 D&D math relies
 on it.
+
+## 2026-04-30 (continued)
+
+### M7 — Multi-select tools polish + Layer Duplicate ✅ shipped
+
+User went out for the day with explicit "knockout as many features
+as you can, push as you go" mandate again. M7 ran open-ended (no
+plan file) — picked 7 incremental UX wins building on M6's
+multi-select substrate:
+
+- **M7-S0** (`25d4137`). MoveTool acts on multi-select. API change:
+  `takeCommit()` returning `optional<PendingMove>` →
+  `takeCommits()` returning `vector<PendingMove>`. MainWindow's
+  dispatch: size==1 → `MoveLayerCommand` (preserves the readable
+  status-bar label); size>1 → `LayerOpCommand` whose closures
+  iterate over the move list. Non-pixel layers in selection
+  (groups, adjustments) skipped silently — they have no origin to
+  shift. 3 new test cases.
+
+- **M7-S1** (`0bb1650`). Up/Down at top/bottom of group pop the
+  layer OUT into the parent scope. Cross-scope moves use
+  `tree.move(fromP, fromI, toP, toI)` with symmetric undo
+  `tree.move(toP, toI, fromP, fromI)`. 2 new test cases.
+
+- **M7-S2** (`74dca08`). Custom drop indicator overlay in
+  `LayerListWidget::paintEvent`. The 3-zone hit-test factored into
+  a private `zoneAt()` so dragMove + drop share one source of
+  truth. Group + middle = blue tinted fill + 2px border ("drop
+  INTO group"); Above / Below = thin green line at top / bottom
+  edge.
+
+- **M7-S3** (`30293be`). ToolsPanel section expanded/collapsed
+  state survives app restart via QSettings under
+  `ToolsPanel/Section/<toolKey>`. Save-on-toggle. Test isolates
+  QSettings to a QTemporaryDir.
+
+- **M7-S4** (`e95bcc7`). Ctrl+J Duplicate Layer for all kinds. New
+  `src/layers/CloneLayer.{h,cpp}`. Bug discovered during testing:
+  the default `TuxImage` copy ctor shares `shared_ptr<Tile>`s
+  rather than deep-copying — writes on a clone perturb the source
+  outside a `beginRecord` window. Fixed via `deepCopyImage` helper
+  that walks tiles and calls `tile->clone()` each. 6 new test
+  cases covering all four adjustment kinds + pixel COW
+  independence + group recursive clone.
+
+- **M7-S5** (`20320d5`). Double-click the name label in
+  LayerRowWidget → in-place QLineEdit. `editingFinished` commits
+  via `LayerOpCommand`; Escape reverts. `bindToLayer` drops
+  stale edit state across panel rebuilds. Pixel + adjustment
+  layers gain a rename path for the first time.
+
+- **M7-S6** (`7fdb460`). Right-click on layer rows opens a context
+  menu: Duplicate / Delete / Rename / Group (non-groups) / Add
+  Mask (pixel without existing mask) / Clip-to-below toggle. PS-
+  style: right-click activates the row + replaces multi-selection
+  with `{layer}`. Rename uses new `LayerRowWidget::beginRename()`
+  public helper.
+
+- **M7-S7** (this commit). STATUS / NEXT / ARCHITECTURE / LOG
+  updated. Tag `v0.7.0-m7` + push.
+
+Discovered during M7:
+- `TuxImage`'s tile-COW is gated on `beginRecord`/`stopRecord`
+  windows. Plain copy-construct shares `shared_ptr<Tile>`s. Documented
+  the implication for clone use cases in CloneLayer.cpp + STATUS
+  + ARCHITECTURE §22.
+- Item widgets in QListWidget eat the mouse events QListWidget's
+  built-in drag detection would need (re-confirmed from M6-S1).
+  `LayerListWidget::mousePressEvent` records the press position +
+  `mouseMoveEvent` initiates a manual `QDrag` on
+  `QApplication::startDragDistance()`. Worth keeping in mind for any
+  other drag-from-row interactions in the future.
+
+Free Transform on multi-select (originally planned as M7-S4)
+deferred to M8 — TransformTool's single-source architecture
+(one `src_` TuxImage, one `Override`, one PendingCommit) needs a
+deep refactor that doesn't fit a polish step.
