@@ -822,3 +822,144 @@ Cumulative deferred-list status:
 Remaining big-ticket items (M13+): Layer effects (drop shadow,
 glow, stroke), Text layers, Smart Objects, ZIP compression
 decoders for PSD, Performance pass.
+
+---
+
+## 2026-04-30 — End-of-session retrospective
+
+User shipped 8 milestones across this autonomous run (M5 push +
+M6 + M7 + M8 + M9 + M10 + M11 + M12). Final state: tag
+`v0.12.0-m12`, 42 executables / 414 internal cases, all green.
+33+ commits on `main`, all pushed. User's first hands-on test of
+the PSD import: it works ("the PSD import worked!") but
+navigation is slow with a real PSD loaded — captured as a known
+issue, queued for M13's Performance pass.
+
+### Headline architectural items shipped
+
+1. **Free Transform on multi-select (M10).** The TransformTool
+   refactor that had been deferred from M7 → M8 → M9 because it
+   wasn't a polish-step-sized change. Approach: each selected
+   `PixelLayer` becomes a `Source` (id, src image, srcOriginX/Y,
+   srcW/H, scratch image, scratchOriginX/Y) sharing a bbox-union
+   doc-coord transform frame. New `buildDocToDoc(centerX, centerY,
+   pivotX, pivotY, sx, sy, angle, bboxCx, bboxCy)` is the shared
+   doc → doc transform applied to every source uniformly. Per-
+   source `dstLocalToSrc = translate(scratchOrigin) · docToDoc^-1
+   · translate(-srcOrigin)` for resampleBilinear. Compose() got a
+   prerequisite `std::span<const LayerOverride>` API so multiple
+   layers can be substituted in one pass. MainWindow's commit
+   handler dispatches: 1 → single TransformCommand (preserves
+   readable label); >1 → LayerOpCommand iterating per-source
+   records.
+
+2. **PSD import read-only (M12).** SCOPE.md §5.1 deferred since
+   M0. Self-contained `src/io/PsdIO.{h,cpp}` with two entry
+   points: `loadPsd(path)` and `loadPsdBytes(span)` (the latter
+   makes hand-rolled byte-buffer fixtures in tests cleaner than
+   committing binary `.psd` files). Big-endian Cursor that fails
+   fast on truncation; PackBits decoder per Apple's spec; per-
+   layer extra-data block stream scanning for `lsct` (section
+   divider) and `luni` (Unicode name override). Section dividers
+   reconstruct group nesting via a parse stack — the same
+   pattern the M5-S2 `.txl` v5 reader uses, which worked out
+   nicely (the SCOPE.md prediction that v5's flat-with-markers
+   would prepare PSD parsing was right).
+
+### Surprises + design decisions worth keeping
+
+- **TuxImage's tile-COW is gated on beginRecord/stopRecord.** Hit
+  this during M7-S4 (Layer Duplicate). Plain copy-construct
+  shares the per-tile `shared_ptr`s; writes on the clone outside
+  a record window mutate the source's tiles. Fix: explicit
+  `deepCopyTuxImage(src)` walks tiles + clones each. Promoted to
+  a public function in `CloneLayer.h` because M8-S2 (Rasterize)
+  and the future Merge Down / PSD readers need it too.
+
+- **Item widgets in QListWidget eat mouse events.** Hit during
+  M6-S1 D&D. `QListWidget::startDrag` triggers off mouseMove with
+  a held button — but with `setItemWidget(...)` installed, those
+  events go to the row widget, not the list. Fix: subclass
+  QListWidget; track press in mousePressEvent; initiate manual
+  `QDrag` from mouseMoveEvent once the cursor crosses
+  `QApplication::startDragDistance()`. Same pattern reused in
+  M7-S2 for the custom drop indicator overlay.
+
+- **LayerTree::move(toIdx) is post-erase frame.** Counter-
+  intuitively, this means passing `final_desired_idx_in_new_layout`
+  works for both forward and backward same-parent moves and for
+  cross-parent moves alike. Documented inline in
+  `LayerTree::move`'s comment + verified through M6-S1 D&D unit
+  tests.
+
+- **PSD section dividers are bottom-to-top.** Type-3 record at
+  the bottom of a group's contents; type-1 (open) or type-2
+  (closed) folder-header record at the top carrying the group's
+  actual name + blend + opacity + visibility. The parse stack
+  pushes on type-3 and finalizes-then-pops on type-1/2.
+  Initially I had this inverted (push on 1/2, pop on 3); test
+  caught it.
+
+- **`commit()` returning optional<single> kept as backward-compat
+  for tests.** When refactoring TransformTool to multi-source in
+  M10-S1, I kept the old single-source `commit()` returning
+  `std::optional<PendingCommit>` (which mirrors `commits()[0]`)
+  so the existing M2/M3 single-layer tests didn't need
+  rewriting. New code uses `commits()` (vector). Same pattern
+  for `Overlay::layer` (legacy single override) vs
+  `Overlay::overrides` (vector).
+
+### Cumulative deferred-list cleared
+
+- All M5/M6/M7 polish items: group props, D&D + drop indicator,
+  multi-select with batch ops, multi-select Move, Up/Down
+  crossing groups, ToolsPanel persistence, Layer Duplicate,
+  rename, context menu.
+- Color labels (M8-S0) + .txl v6.
+- Tablet pressure (M8-S1).
+- Rasterize Layer (M8-S2).
+- Merge Down (M9).
+- Free Transform on multi-select (M10) — the M7-deferred
+  architectural item.
+- Pressure-aware cursor (M11-S0) + Eyedropper (M11-S1).
+- PSD read-only import (M12) — SCOPE.md §5.1 since M0.
+
+### Known issues at session end
+
+- **PSD navigation slowness** with real-world files. User
+  observed during first hands-on test. Likely culprits: per-tile
+  compose cost over many layers, full recomposite on hover, no
+  viewport-rect culling. Queued for M13+ Performance pass. Worth
+  profiling with `perf record -g` to identify hot spots before
+  rewriting.
+- The M5 user DoD walkthrough was never run by the user (they
+  went straight into M6+ work). Not a regression — those steps
+  still work as far as the unit tests indicate, but
+  manual-walkthrough confirmation is queued in
+  `docs/MANUAL_TEST_CHECKLIST.md`.
+- Brush cursor radius mid-stroke pressure (M11-S0) is a UI
+  affordance only — verifiable on a tablet, no automated test.
+
+### Big-ticket items remaining for M13+
+
+In priority order:
+
+1. **Performance pass** — PSD slowness is the user-visible
+   trigger; opportunity to also multi-thread `composeTileRange`
+   and cache per-layer renderTile output across tiles where the
+   layer's dirty rect doesn't overlap.
+2. **Layer effects** (drop shadow, glow, stroke). PS-staple
+   feature. Cross-tile blur is the design challenge.
+3. **Text layers** (`TextLayer` kind). Qt's QPainter +
+   QFontMetrics; rasterize on demand.
+4. **Smart Objects** — re-editable embedded sub-documents.
+5. **PSD enhancements**: ZIP compression decoders, smart-object
+   pixel data, `lfx2` layer-effect decoding (depends on item 2).
+
+### Session-end pace check
+
+- M5 (entry): 37 executables / 364 cases.
+- M12 (exit): 42 executables / 414 cases.
+- Net gain: +5 executables / +50 internal cases / 8 tags shipped
+  / 33+ commits / 0 unit-test regressions / 1 user-reported
+  issue (PSD perf).
