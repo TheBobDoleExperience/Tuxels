@@ -53,8 +53,17 @@ struct Ctx {
   TileCoord tc;
   Rgba32F* layerTile;     // scratch, kTilePixels
   Rgba32F* adjScratch;    // scratch, kTilePixels
-  const LayerOverride* override;
+  std::span<const LayerOverride> overrides;
 };
+
+// Find the override matching `layerId` in the span, or nullptr.
+inline const LayerOverride* findOverride(std::span<const LayerOverride> overrides,
+                                          LayerId id) {
+  for (const auto& ov : overrides) {
+    if (ov.layerId == id && ov.image) return &ov;
+  }
+  return nullptr;
+}
 
 // Recursively composite a list of children into `accum` for one tile.
 // `lastBaseAlpha[kTilePixels]` and `hasBase` track the per-pixel alpha of
@@ -238,11 +247,10 @@ void composeChildren(const Ctx& ctx,
     for (int i = 0; i < kTilePixels; ++i) {
       ctx.layerTile[i] = Rgba32F::transparent();
     }
-    const bool useOverride = ctx.override && ctx.override->image &&
-                             ctx.override->layerId == layer->id;
+    const LayerOverride* ov = findOverride(ctx.overrides, layer->id);
     const bool rendered =
-        useOverride ? renderOverrideTile(*ctx.override, ctx.tc, ctx.layerTile)
-                    : layer->renderTile(ctx.tc, ctx.layerTile);
+        ov ? renderOverrideTile(*ov, ctx.tc, ctx.layerTile)
+           : layer->renderTile(ctx.tc, ctx.layerTile);
     if (!rendered) continue;
 
     // renderTile already translated by the layer's origin and pre-
@@ -277,7 +285,8 @@ void composeChildren(const Ctx& ctx,
 }
 
 void composeTileRange(const LayerTree& tree, TuxImage& out, int tx0, int ty0,
-                      int tx1, int ty1, const LayerOverride* override) {
+                      int tx1, int ty1,
+                      std::span<const LayerOverride> overrides) {
   std::vector<Rgba32F> accum(kTilePixels);
   std::vector<Rgba32F> layerTile(kTilePixels);
   std::vector<Rgba32F> adjScratch(kTilePixels);
@@ -297,7 +306,7 @@ void composeTileRange(const LayerTree& tree, TuxImage& out, int tx0, int ty0,
       std::fill(accum.begin(), accum.end(), Rgba32F::transparent());
       bool hasBase = false;
 
-      Ctx ctx{tc, layerTile.data(), adjScratch.data(), override};
+      Ctx ctx{tc, layerTile.data(), adjScratch.data(), overrides};
       composeChildren(ctx, root, accum.data(), lastBaseAlpha.data(), hasBase);
 
       const Rect rect = out.pixelRectForTile(tc);
@@ -317,14 +326,14 @@ void composeTileRange(const LayerTree& tree, TuxImage& out, int tx0, int ty0,
 }  // namespace
 
 void compose(const LayerTree& tree, TuxImage& out,
-             const LayerOverride* override) {
+             std::span<const LayerOverride> overrides) {
   if (out.width() <= 0 || out.height() <= 0) return;
   const Rect tb = out.tileBounds();
-  composeTileRange(tree, out, tb.x, tb.y, tb.x + tb.w, tb.y + tb.h, override);
+  composeTileRange(tree, out, tb.x, tb.y, tb.x + tb.w, tb.y + tb.h, overrides);
 }
 
 void compose(const LayerTree& tree, TuxImage& out, Rect pixelRect,
-             const LayerOverride* override) {
+             std::span<const LayerOverride> overrides) {
   if (out.width() <= 0 || out.height() <= 0) return;
   if (pixelRect.isEmpty()) return;
   const Rect tb = out.tileBounds();
@@ -345,7 +354,28 @@ void compose(const LayerTree& tree, TuxImage& out, Rect pixelRect,
   const int ty1 = std::min(tb.y + tb.h, divFloor(py1 - 1, kTilePx) + 1);
   if (tx1 <= tx0 || ty1 <= ty0) return;
 
-  composeTileRange(tree, out, tx0, ty0, tx1, ty1, override);
+  composeTileRange(tree, out, tx0, ty0, tx1, ty1, overrides);
+}
+
+// Single-override convenience wrappers — wrap the pointer in a 0/1-element
+// span and forward. Tests + non-Transform code paths still pass nullptr
+// or an explicit pointer.
+void compose(const LayerTree& tree, TuxImage& out,
+             const LayerOverride* override) {
+  if (override) {
+    compose(tree, out, std::span<const LayerOverride>(override, 1));
+  } else {
+    compose(tree, out, std::span<const LayerOverride>{});
+  }
+}
+
+void compose(const LayerTree& tree, TuxImage& out, Rect pixelRect,
+             const LayerOverride* override) {
+  if (override) {
+    compose(tree, out, pixelRect, std::span<const LayerOverride>(override, 1));
+  } else {
+    compose(tree, out, pixelRect, std::span<const LayerOverride>{});
+  }
 }
 
 }  // namespace tuxels
