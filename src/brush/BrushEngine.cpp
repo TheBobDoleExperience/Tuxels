@@ -29,28 +29,40 @@ void BrushEngine::growBounds(int x0, int y0, int x1, int y1) {
 void BrushEngine::applyStamp(float cx, float cy) {
   const auto& p = brush_.params();
   const bool jitter = (p.sizeJitter > 0.f) || (p.opacityJitter > 0.f);
+  // M8-S1: nontrivial pressure scales D + opacity. Pressure == 1.0 keeps
+  // the original branch bitwise-identical so non-tablet input stays
+  // exactly as it was.
+  const bool pressureScale = pressure_ < 1.f - 1e-6f;
 
   int D;
   const float* kernelData;
   float opEff;
 
-  if (!jitter) {
-    // Base path: untouched by S6, must stay bitwise identical to M2-S5
-    // output when jitter is zero.
+  if (!jitter && !pressureScale) {
+    // Base path: untouched by S6/M8, must stay bitwise identical to M2-S5
+    // output when jitter is zero AND pressure is full.
     D = brush_.diameter();
     kernelData = nullptr;  // sampled via brush_.kernel below
     opEff = p.opacity;
   } else {
     std::uniform_real_distribution<float> U(-1.f, 1.f);
     const float baseD = static_cast<float>(brush_.diameter());
-    const float sizeScale = 1.f + p.sizeJitter * U(rng_);
+    float sizeScale = 1.f;
+    float opScale = 1.f;
+    if (jitter) {
+      sizeScale *= 1.f + p.sizeJitter * U(rng_);
+      opScale *= 1.f + p.opacityJitter * U(rng_);
+    }
+    if (pressureScale) {
+      sizeScale *= pressure_;
+      opScale *= pressure_;
+    }
     const float jitteredD = std::max(1.f, std::round(baseD * sizeScale));
     // Cap at 2× the base so large jitter doesn't blow up the stamp cost.
     D = std::min(static_cast<int>(jitteredD), brush_.diameter() * 2);
     D = std::max(1, D);
     RoundBrush::buildKernel(D, p.hardness, stampKernel_);
     kernelData = stampKernel_.data();
-    const float opScale = 1.f + p.opacityJitter * U(rng_);
     opEff = std::clamp(p.opacity * opScale, 0.f, 1.f);
   }
 

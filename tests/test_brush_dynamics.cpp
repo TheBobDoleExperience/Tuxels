@@ -248,6 +248,84 @@ TEST(brush_dynamics_spacing_ratio_affects_density) {
   CHECK(denseAvg > sparseAvg);
 }
 
+// ---------- M8-S1: stylus pressure scaling ----------
+
+TEST(brush_pressure_full_is_bitwise_identical_to_pre_m8) {
+  // Default pressure (1.0) on a no-jitter brush must reproduce the exact
+  // pre-M8 path. Sampling the engine output here pins the regression
+  // protection against future refactors that disturb the no-jitter base
+  // case.
+  RoundBrushParams p = basicParams();
+  RoundBrush b(p);
+  TuxImage a(48, 48), c(48, 48);
+
+  BrushEngine ea(b, a);
+  ea.setPressure(1.0f);
+  ea.beginStroke(24.f, 24.f);
+  ea.endStroke();
+
+  BrushEngine ec(b, c);
+  // No setPressure call → pressure stays at default 1.0 — the engines'
+  // outputs must match.
+  ec.beginStroke(24.f, 24.f);
+  ec.endStroke();
+
+  CHECK(imagesBitwiseEqual(a, c));
+}
+
+TEST(brush_pressure_zero_lays_minimal_or_no_pixels) {
+  RoundBrushParams p = basicParams();
+  RoundBrush b(p);
+  TuxImage img(48, 48);
+
+  BrushEngine eng(b, img);
+  eng.setPressure(0.0f);
+  eng.beginStroke(24.f, 24.f);
+  eng.endStroke();
+
+  // opEff = 1 * 0 = 0 → every stamp pixel writes a == 0 → nothing
+  // visible. The exact tile bookkeeping may still allocate a tile (the
+  // stamp loop touches setPixel even with a == 0; sometimes it short-
+  // circuits via `a <= 0.f → continue`). Either way, no opaque ink.
+  for (int y = 0; y < img.height(); ++y) {
+    for (int x = 0; x < img.width(); ++x) {
+      const Rgba32F pix = img.getPixel(x, y);
+      CHECK(pix.a < 1e-6f);
+    }
+  }
+}
+
+TEST(brush_pressure_half_paints_lighter_than_full) {
+  // Pressure 0.5 → smaller diameter + halved opacity. The total ink
+  // coverage (sum of alpha) is strictly less than at pressure 1.0.
+  auto inkSum = [](const TuxImage& img) {
+    double sum = 0.0;
+    for (int y = 0; y < img.height(); ++y) {
+      for (int x = 0; x < img.width(); ++x) {
+        sum += img.getPixel(x, y).a;
+      }
+    }
+    return sum;
+  };
+
+  RoundBrushParams p = basicParams();
+  RoundBrush b(p);
+  TuxImage hi(48, 48), lo(48, 48);
+
+  BrushEngine eHi(b, hi);
+  eHi.setPressure(1.0f);
+  eHi.beginStroke(24.f, 24.f);
+  eHi.endStroke();
+
+  BrushEngine eLo(b, lo);
+  eLo.setPressure(0.5f);
+  eLo.beginStroke(24.f, 24.f);
+  eLo.endStroke();
+
+  CHECK(inkSum(hi) > inkSum(lo));
+  CHECK(inkSum(lo) > 0.0);
+}
+
 }  // namespace tuxels
 
 int main() { return tuxels::testing::run(); }

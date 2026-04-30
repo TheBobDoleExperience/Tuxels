@@ -8,6 +8,7 @@
 #include <QPen>
 #include <QPixmap>
 #include <QPolygonF>
+#include <QTabletEvent>
 #include <QTimer>
 #include <QWheelEvent>
 #include <algorithm>
@@ -691,6 +692,9 @@ void CanvasView::mousePressEvent(QMouseEvent* e) {
   }
   if (tool_ && doc_ && e->button() == Qt::LeftButton) {
     tool_->setModifiers(translateModifiers(e->modifiers()));
+    // Mouse path: full pressure. Tablet press path overrides this in
+    // `tabletEvent` before forwarding into the same code below.
+    tool_->setPressure(1.0f);
     const QPointF ip = (QPointF(e->pos()) - pan_) / zoom_;
     std::optional<std::vector<Point2f>> prePath = tool_->livePath();
     tool_->press(*doc_, static_cast<float>(ip.x()),
@@ -738,6 +742,7 @@ void CanvasView::mouseMoveEvent(QMouseEvent* e) {
     // Re-read modifiers on each move so Shift held mid-drag reaches the
     // tool (transform aspect-lock, rotation snap, …).
     tool_->setModifiers(translateModifiers(e->modifiers()));
+    tool_->setPressure(1.0f);
     const QPointF ip = (QPointF(e->pos()) - pan_) / zoom_;
     tool_->move(*doc_, static_cast<float>(ip.x()),
                 static_cast<float>(ip.y()));
@@ -810,6 +815,67 @@ void CanvasView::mouseReleaseEvent(QMouseEvent* e) {
     return;
   }
   QWidget::mouseReleaseEvent(e);
+}
+
+void CanvasView::tabletEvent(QTabletEvent* e) {
+  // M8-S1: forward stylus events into the same press/move/release pipeline
+  // as mouse, after pushing pressure into the tool. Pressure is in
+  // [0..1]; tools that don't read it ignore the value (defaults back to
+  // 1.0 on the next mouse path).
+  if (!tool_ || !doc_) {
+    QWidget::tabletEvent(e);
+    return;
+  }
+  const float pressure = std::clamp(static_cast<float>(e->pressure()), 0.f, 1.f);
+  const QPointF widgetPos = e->position();
+  const QPointF ip = (widgetPos - pan_) / zoom_;
+
+  switch (e->type()) {
+    case QEvent::TabletPress: {
+      tool_->setModifiers(translateModifiers(e->modifiers()));
+      tool_->setPressure(pressure);
+      tool_->press(*doc_, static_cast<float>(ip.x()),
+                   static_cast<float>(ip.y()), MouseButton::Left);
+      painting_ = true;
+      moveBrushCursorTo(widgetPos);
+      const Rect dirty = tool_->takeDirtyRect();
+      if (!dirty.isEmpty()) requestRecomposite(dirty);
+      else requestRecomposite();
+      e->accept();
+      return;
+    }
+    case QEvent::TabletMove: {
+      cursorInCanvas_ = true;
+      moveBrushCursorTo(widgetPos);
+      if (painting_) {
+        tool_->setModifiers(translateModifiers(e->modifiers()));
+        tool_->setPressure(pressure);
+        tool_->move(*doc_, static_cast<float>(ip.x()),
+                    static_cast<float>(ip.y()));
+        const Rect dirty = tool_->takeDirtyRect();
+        if (!dirty.isEmpty()) requestRecomposite(dirty);
+      }
+      e->accept();
+      return;
+    }
+    case QEvent::TabletRelease: {
+      moveBrushCursorTo(widgetPos);
+      if (painting_) {
+        tool_->setPressure(pressure);
+        tool_->release(*doc_, static_cast<float>(ip.x()),
+                       static_cast<float>(ip.y()), MouseButton::Left);
+        painting_ = false;
+        const Rect dirty = tool_->takeDirtyRect();
+        if (!dirty.isEmpty()) requestRecomposite(dirty);
+        emit layerPainted();
+      }
+      e->accept();
+      return;
+    }
+    default:
+      break;
+  }
+  QWidget::tabletEvent(e);
 }
 
 }  // namespace tuxels

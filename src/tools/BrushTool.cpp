@@ -26,16 +26,19 @@ void BrushTool::press(Document& doc, float x, float y, MouseButton btn) {
   activeTarget_ = target;
   activeTarget_->beginRecord();
   engine_ = std::make_unique<BrushEngine>(brush_, *activeTarget_, doc.selection());
+  engine_->setPressure(pressure());
   engine_->beginStroke(x, y);
 }
 
 void BrushTool::move(Document& /*doc*/, float x, float y) {
   if (!engine_) return;
+  engine_->setPressure(pressure());
   engine_->continueStroke(x, y);
 }
 
 void BrushTool::release(Document& /*doc*/, float x, float y, MouseButton btn) {
   if (btn != MouseButton::Left || !engine_) return;
+  engine_->setPressure(pressure());
   engine_->continueStroke(x, y);
   engine_->endStroke();
   TuxImage::Recorded rec = activeTarget_->stopRecord();

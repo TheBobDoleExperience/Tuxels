@@ -73,8 +73,17 @@ class ToolBase {
   void setModifiers(int flags) noexcept { modifiers_ = flags; }
   int modifiers() const noexcept { return modifiers_; }
 
+  // Stylus / tablet pressure for the next press/move event. CanvasView's
+  // QTabletEvent path sets this 0.0..1.0; mouse paths leave it at 1.0
+  // so non-tablet input keeps producing full-strength strokes. Tools
+  // that don't use pressure (Move, Marquee, Crop, etc.) ignore this.
+  // M8-S1.
+  void setPressure(float p) noexcept { pressure_ = p; }
+  float pressure() const noexcept { return pressure_; }
+
  protected:
   int modifiers_ = 0;
+  float pressure_ = 1.0f;
 };
 
 }  // namespace tuxels

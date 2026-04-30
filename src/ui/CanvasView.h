@@ -65,6 +65,10 @@ class CanvasView : public QWidget {
   void mousePressEvent(QMouseEvent*) override;
   void mouseMoveEvent(QMouseEvent*) override;
   void mouseReleaseEvent(QMouseEvent*) override;
+  // M8-S1: stylus events. Qt routes pen-down/pen-up via tabletEvent;
+  // we forward to the same press/move/release pipeline as mouse but
+  // first push pressure into the active tool via setPressure().
+  void tabletEvent(QTabletEvent*) override;
   void enterEvent(QEnterEvent*) override;
   void leaveEvent(QEvent*) override;
   QSize sizeHint() const override { return QSize(1024, 768); }

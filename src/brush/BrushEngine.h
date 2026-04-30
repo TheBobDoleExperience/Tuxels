@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <random>
 #include <vector>
@@ -56,6 +57,15 @@ class BrushEngine {
     havePinnedSeed_ = true;
   }
 
+  // M8-S1: stylus pressure for the next applyStamp. CanvasView's tablet
+  // path pushes 0..1 here; mouse path leaves it at 1.0. With pressure ==
+  // 1.0 the engine is bitwise identical to its pre-M8 behaviour (the
+  // applyStamp branch only deviates when pressure < 1).
+  void setPressure(float p) noexcept {
+    pressure_ = std::clamp(p, 0.f, 1.f);
+  }
+  float pressure() const noexcept { return pressure_; }
+
  private:
   void growBounds(int x0, int y0, int x1, int y1);
 
@@ -72,6 +82,7 @@ class BrushEngine {
   std::uint64_t strokeIdCounter_ = 0;
   std::uint64_t pinnedSeed_ = 0;
   bool havePinnedSeed_ = false;
+  float pressure_ = 1.f;
   std::mt19937 rng_;
   std::vector<float> stampKernel_;
 };
