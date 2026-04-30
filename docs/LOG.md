@@ -502,3 +502,71 @@ Plan: `/home/james/.claude/plans/let-s-make-a-plan-resilient-engelbart.md`.
 - 6 commits on `main` between `57b07d4` (S0) and `276ef98` (S5),
   all building cleanly with 100% test pass each step.
 - Pending: S6 DoD walkthrough (user-driven) → tag `v0.5.0-m5`.
+
+---
+
+## 2026-04-30
+
+### M6 — UX Polish (Group Properties / D&D / Multi-select) ✅ shipped
+
+User stepped away with explicit "knockout as many features as you
+can, push as you go" mandate. M5 tag (`v0.5.0-m5`) had been created
+locally on 2026-04-26 but not pushed; preflight confirmed 37/37
+green at HEAD, then pushed `origin main v0.5.0-m5`. M6 plan
+written to `/home/james/.claude/plans/lets-take-a-look-iterative-platypus.md`
+picking the three smallest of the six M5-deferred candidates.
+
+- **M6-S0 PropertiesPaneGroup** (`1e337e3`). New
+  `src/ui/PropertiesPaneGroup.{h,cpp}` mirroring
+  `PropertiesPaneHueSat`'s snapshot/commit shape. Closes the
+  explicit `bindNothing()` TODO in
+  `MainWindow::bindActiveAdjustmentToDock`'s Group arm. New
+  `GroupProperties { name, blend, opacity, clipToBelow }` struct;
+  `LayerParamsCommand<GroupLayer, GroupProperties>` with a 4-field
+  atomic setter. `PropertiesDock` extended with `bindGroup` + page
+  5 + `groupCommitRequested`. Build hit a Qt6 `qmetatype.h`
+  incomplete-type error from forward-declaring `GroupLayer` in the
+  dock header (signal payloads need full types); fixed by including
+  `layers/GroupLayer.h`. 8 cases in new `test_properties_pane_group`.
+  372/38.
+
+- **M6-S1 LayersPanel D&D + cross-parent move** (`c0bddc8`). Item
+  widgets (`LayerRowWidget`) eat the mouse events that
+  `QListWidget`'s built-in drag detection would need, so a private
+  `LayerListWidget : QListWidget` subclass tracks press position
+  and initiates a manual `QDrag` once the cursor crosses
+  `QApplication::startDragDistance()`. Custom MIME
+  `application/x-tuxels-layerid` carrying an 8-byte LayerId. 3-zone
+  hit-test inside target row (top quarter = Above, bottom quarter
+  = Below, middle half = On). Tree-coordinate translation accounts
+  for the panel reversing tree order; same-parent symmetric undo
+  via `tree.move(toP, toI, fromP, fromI)`. Cycle detection walks
+  ancestor chain. Did NOT subclass `MoveLayerCommand` (which is
+  for origin x/y, not tree position) — used `LayerOpCommand`
+  closures throughout. 7 cases in new `test_layer_dnd`. 379/39.
+
+- **M6-S2 Multi-select** (`fa5c047`). `Document::selectedLayerIds_`
+  + `selectedLayers()`. `LayersPanel` switches to
+  `ExtendedSelection`; `itemSelectionChanged` syncs into Document.
+  Three batch ops in MainWindow (delete / group / visibility),
+  each producing a single undo entry. Filter-descendants pass
+  excludes children of selected ancestors so group deletion sweeps
+  the subtree via the unique_ptr chain. For batch group, walks
+  `tree.flatten()` to collect filtered ids in bottom-up tree
+  order so children inside the new group preserve original
+  ordering. Tools stay single-active explicitly — multi-active
+  tool semantics (bbox-union Move / Transform / Free Transform)
+  scoped out for M7. 8 cases in new `test_multi_select`. 387/40.
+
+- **M6-S3** (this commit). STATUS / NEXT / ARCHITECTURE / LOG
+  updated. Tag `v0.6.0-m6` + push.
+
+Discovered during M6: M5-S0's `LayerTree::move(fromP, fromI, toP,
+toI)` semantics — toIdx is in the post-erase frame for same-parent
+moves, which (counterintuitively) ends up being equivalent to "the
+final desired position" in the new layout. `vector::insert(begin()+K, val)`
+inserts BEFORE existing K, so erase-K-then-insert-at-K returns the
+moved item to a position that, when N stays constant, equals the
+caller's intended final idx. This is documented in LayerTree.h's
+move comment but the equivalence is non-obvious; M6 D&D math relies
+on it.
