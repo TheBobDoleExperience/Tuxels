@@ -2,11 +2,19 @@
 
 #include <memory>
 
+#include "core/TuxImage.h"
 #include "layers/LayerBase.h"
 
 namespace tuxels {
 
 class Document;
+
+// Deep-copy a TuxImage by walking present tiles and cloning each tile's
+// contents. The default `TuxImage` copy ctor only shares the per-tile
+// shared_ptrs, so writes on the copy outside a `beginRecord`/`stopRecord`
+// window would mutate the source's tiles. Used by `cloneLayer` (M7-S4) and
+// the M8-S2 Rasterize Layer command (mask propagation).
+TuxImage deepCopyTuxImage(const TuxImage& src);
 
 // Deep-clone a layer, allocating a fresh `LayerId` for the result and
 // inheriting the source's name with " copy" appended. Dispatches on

@@ -11,20 +11,19 @@
 
 namespace tuxels {
 
-namespace {
-
-// Deep-copy a TuxImage by walking each present tile and cloning its
-// contents — TuxImage's default copy ctor only shares the per-tile
-// shared_ptrs, which would mean writes on the clone perturb the source
-// outside of a beginRecord/stopRecord window. For Duplicate Layer we
-// need fully independent storage so the user can paint on either copy
-// without affecting the other.
-TuxImage deepCopyImage(const TuxImage& src) {
+TuxImage deepCopyTuxImage(const TuxImage& src) {
   TuxImage out(src.width(), src.height());
   for (const auto& kv : src.tiles()) {
     if (kv.second) out.tiles().set(kv.first, kv.second->clone());
   }
   return out;
+}
+
+namespace {
+
+// Internal alias kept for the existing call sites in this file.
+TuxImage deepCopyImage(const TuxImage& src) {
+  return deepCopyTuxImage(src);
 }
 
 // Copy LayerBase's mutable common fields from `src` onto `dst`. Caller is

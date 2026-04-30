@@ -56,6 +56,7 @@ class MainWindow : public QMainWindow {
   void onLayerAddHueSaturation();
   void onLayerDelete();
   void onLayerDuplicate();
+  void onLayerRasterize();
   void onLayerMoveUp();
   void onLayerMoveDown();
   void onLayerPanelMutated();

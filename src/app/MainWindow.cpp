@@ -150,6 +150,12 @@ void MainWindow::buildMenus() {
   connect(dupLayerAct, &QAction::triggered, this,
           &MainWindow::onLayerDuplicate);
 
+  // M8-S2: flatten a group + its children into a single pixel layer.
+  // No-op + status message for pixel / adjustment kinds.
+  auto* rasterAct = layerMenu->addAction(tr("&Rasterize Layer"));
+  connect(rasterAct, &QAction::triggered, this,
+          &MainWindow::onLayerRasterize);
+
   layerMenu->addSeparator();
   // Group / Ungroup (M5-S4). Enabled state tracks the active layer:
   // Group Layer requires any active layer; Ungroup Layer requires the
@@ -1451,6 +1457,96 @@ void MainWindow::onLayerDuplicate() {
   doIt();
   undoStack_->push(std::make_unique<LayerOpCommand>(
       "Duplicate Layer", std::move(doIt), std::move(undoIt)));
+}
+
+void MainWindow::onLayerRasterize() {
+  if (!doc_ || !undoStack_) return;
+  LayerBase* active = doc_->activeLayer();
+  if (!active) return;
+  if (active->kind() != LayerKind::Group) {
+    statusBar()->showMessage(
+        tr("Rasterize currently supports group layers only."), 2000);
+    return;
+  }
+  auto* group = static_cast<GroupLayer*>(active);
+  auto loc = doc_->tree().locate(group->id);
+  if (!loc) return;
+
+  // Compose the children isolated against transparent (clones into a
+  // tmp doc so the original group + tree stay untouched). Mask + group
+  // blend + opacity stay on the new pixel layer; that way the rasterized
+  // result composites identically to the original group when stacked
+  // over the same layers below.
+  Document tmp(doc_->width(), doc_->height());
+  for (const auto& c : group->children) {
+    if (c) tmp.tree().add(cloneLayer(*c, tmp));
+  }
+  TuxImage flat(doc_->width(), doc_->height());
+  compose(tmp.tree(), flat);
+
+  auto px = std::make_unique<PixelLayer>();
+  px->image = std::move(flat);
+  px->id = doc_->nextLayerId();
+  px->name = group->name + " (rasterized)";
+  px->visible = group->visible;
+  px->opacity = group->opacity;
+  // Pass-Through doesn't mean anything on a pixel layer — fall back to
+  // Normal so the new layer composes the way a leaf would.
+  px->blend = (group->blend == BlendMode::PassThrough)
+                  ? BlendMode::Normal
+                  : group->blend;
+  px->clipToBelow = group->clipToBelow;
+  px->colorLabel = group->colorLabel;
+  if (group->mask) {
+    auto m = std::make_unique<LayerMask>(group->mask->image.width(),
+                                          group->mask->image.height());
+    m->image = deepCopyTuxImage(group->mask->image);
+    m->enabled = group->mask->enabled;
+    px->mask = std::move(m);
+  }
+  const LayerId newId = px->id;
+  const LayerId parentId = loc->parent ? loc->parent->id : 0;
+  const std::size_t idx = loc->index;
+  const LayerId prevActiveId = doc_->activeLayerId();
+
+  // Stash the original group (with all children) for undo. After doIt()
+  // the stash holds the GroupLayer; undoIt swaps it back at (parent, idx)
+  // and removes the rasterized pixel layer.
+  auto origStash = std::make_shared<std::unique_ptr<LayerBase>>();
+  auto pixelStash = std::make_shared<std::unique_ptr<LayerBase>>(std::move(px));
+
+  auto resolveParent = [this](LayerId pid) -> GroupLayer* {
+    if (pid == 0) return nullptr;
+    return dynamic_cast<GroupLayer*>(doc_->tree().findById(pid));
+  };
+
+  auto doIt = [this, origStash, pixelStash, parentId, idx, newId,
+               resolveParent]() mutable {
+    GroupLayer* parent = resolveParent(parentId);
+    if (!*pixelStash) return;
+    *origStash = doc_->tree().removeFromPath(parent, idx);
+    if (!*origStash) return;
+    doc_->tree().insertAtPath(parent, idx, std::move(*pixelStash));
+    doc_->setActiveLayerId(newId);
+    doc_->setSelectedLayerIds({newId});
+    refreshAfterUndoRedo();
+  };
+  auto undoIt = [this, origStash, pixelStash, parentId, idx, prevActiveId,
+                 resolveParent]() mutable {
+    GroupLayer* parent = resolveParent(parentId);
+    if (!*origStash) return;
+    *pixelStash = doc_->tree().removeFromPath(parent, idx);
+    doc_->tree().insertAtPath(parent, idx, std::move(*origStash));
+    doc_->setActiveLayerId(prevActiveId);
+    doc_->setSelectedLayerIds(prevActiveId == 0
+                                  ? std::vector<LayerId>{}
+                                  : std::vector<LayerId>{prevActiveId});
+    refreshAfterUndoRedo();
+  };
+
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>(
+      "Rasterize Layer", std::move(doIt), std::move(undoIt)));
 }
 
 void MainWindow::onLayerMoveUp() {
