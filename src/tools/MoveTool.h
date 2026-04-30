@@ -1,6 +1,6 @@
 #pragma once
 
-#include <optional>
+#include <vector>
 
 #include "core/TuxImage.h"
 #include "layers/LayerBase.h"
@@ -10,18 +10,23 @@ namespace tuxels {
 
 class Document;
 
-// Move-tool: drag the active layer's origin around the canvas. Pixels are
-// untouched — only `originX/originY` change, so the layer's backing image
-// and any mask stay allocated exactly as they are (including pixels that
-// move offscreen during the drag).
+// Move-tool: drag the active (and any other multi-selected) pixel layers'
+// origins around the canvas. Pixels are untouched — only `originX/originY`
+// change, so each layer's backing image and any mask stay allocated
+// exactly as they are (including pixels that move offscreen during the
+// drag).
 //
-// Live drag writes the origin directly onto the layer so the existing
-// paint path (takeDirtyRect → partial recomposite → widget update) can
-// render the preview without any new machinery. On release we produce a
-// `PendingMove` that MainWindow turns into a `MoveLayerCommand`; the
-// command's apply() is idempotent w.r.t. the already-live origin, so
-// pushing it immediately after the drag records the (before, after) pair
-// without double-applying.
+// M7-S0: when `Document::selectedLayerIds()` has more than one entry, all
+// selected pixel layers move together by the same drag delta. Non-pixel
+// layers in the selection (groups, adjustment layers) are ignored for
+// movement — their child layers, if any, must be selected explicitly.
+//
+// Live drag writes the origin directly onto each captured layer so the
+// existing paint path (takeDirtyRect → partial recomposite → widget
+// update) renders the preview without new machinery. On release we latch
+// a `PendingMove` per moved layer; MainWindow drains the vector and
+// produces a single undo entry — `MoveLayerCommand` for the 1-layer case,
+// `LayerOpCommand` whose closures iterate over the batch otherwise.
 class MoveTool : public ToolBase {
  public:
   MoveTool() = default;
@@ -39,9 +44,7 @@ class MoveTool : public ToolBase {
   // Move has no brush-style finite footprint; no ring to draw.
   std::optional<float> cursorRadiusPx() const override { return std::nullopt; }
 
-  // MainWindow polls this after release to push an undo entry. `layerId`
-  // lets the command find the right layer even if layer ordering changes
-  // between the commit and a later redo.
+  // Per-layer origin diff produced by a finished drag.
   struct PendingMove {
     LayerId layerId = 0;
     int beforeX = 0;
@@ -49,26 +52,37 @@ class MoveTool : public ToolBase {
     int afterX = 0;
     int afterY = 0;
   };
-  std::optional<PendingMove> takeCommit() {
-    if (!pending_) return std::nullopt;
-    auto out = *pending_;
-    pending_.reset();
+
+  // Drain pending commits. Returns one entry per moved pixel layer (1 for
+  // a single-active drag, N for a multi-select drag). Empty if nothing
+  // moved or the drag was cancelled.
+  std::vector<PendingMove> takeCommits() {
+    auto out = std::move(pending_);
+    pending_.clear();
     return out;
   }
 
  private:
+  // Per-layer drag state captured at press(). Each entry tracks the
+  // layer's id + original origin + dimensions used by the dirty-rect
+  // union math so per-layer move deltas can union into one shared
+  // `dirty_` rect.
+  struct DragLayer {
+    LayerId id = 0;
+    int beforeX = 0;
+    int beforeY = 0;
+    int layerW = 0;
+    int layerH = 0;
+  };
+
   bool dragging_ = false;
-  LayerId layerId_ = 0;
   int startMouseX_ = 0;
   int startMouseY_ = 0;
-  int beforeX_ = 0;
-  int beforeY_ = 0;
-  int layerW_ = 0;
-  int layerH_ = 0;
   int docW_ = 0;
   int docH_ = 0;
+  std::vector<DragLayer> dragLayers_;
   Rect dirty_{};
-  std::optional<PendingMove> pending_;
+  std::vector<PendingMove> pending_;
 };
 
 }  // namespace tuxels

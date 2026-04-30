@@ -1517,19 +1517,46 @@ void MainWindow::onLayerPainted() {
                                2000);
     }
   }
-  // Move commit. The live drag already installed the new origin; we just
-  // record the (before, after) pair so undo/redo can swap. apply() on the
-  // command is idempotent against the already-set origin, so pushing it
-  // here doesn't double-apply.
+  // Move commit. The live drag already installed the new origin on each
+  // moved layer; we just record (before, after) per layer so undo/redo
+  // can swap. M7-S0: multi-select drags produce N commits — wrap in one
+  // LayerOpCommand so undo restores all origins together. Single-layer
+  // case stays on `MoveLayerCommand` for the readable label.
   if (moveTool_) {
-    if (auto commit = moveTool_->takeCommit()) {
+    auto commits = moveTool_->takeCommits();
+    if (commits.size() == 1) {
+      const auto& c = commits[0];
       undoStack_->push(std::make_unique<MoveLayerCommand>(
-          doc_.get(), commit->layerId, commit->beforeX, commit->beforeY,
-          commit->afterX, commit->afterY));
+          doc_.get(), c.layerId, c.beforeX, c.beforeY, c.afterX, c.afterY));
       statusBar()->showMessage(tr("Moved layer to (%1, %2)")
-                                   .arg(commit->afterX)
-                                   .arg(commit->afterY),
+                                   .arg(c.afterX)
+                                   .arg(c.afterY),
                                1500);
+    } else if (commits.size() > 1) {
+      // Capture the move list by value into both closures.
+      auto applyAll = [this](const std::vector<MoveTool::PendingMove>& list,
+                              bool toAfter) {
+        for (const auto& c : list) {
+          if (auto* l = doc_->tree().findById(c.layerId)) {
+            l->originX = toAfter ? c.afterX : c.beforeX;
+            l->originY = toAfter ? c.afterY : c.beforeY;
+          }
+        }
+      };
+      auto doIt = [this, commits, applyAll]() {
+        applyAll(commits, /*toAfter=*/true);
+        refreshAfterUndoRedo();
+      };
+      auto undoIt = [this, commits, applyAll]() {
+        applyAll(commits, /*toAfter=*/false);
+        refreshAfterUndoRedo();
+      };
+      // Don't call doIt() — the live drag already applied `after`. Just
+      // record the inverse path on the undo stack.
+      undoStack_->push(std::make_unique<LayerOpCommand>(
+          "Move Layers", std::move(doIt), std::move(undoIt)));
+      statusBar()->showMessage(
+          tr("Moved %1 layers").arg(static_cast<int>(commits.size())), 1500);
     }
   }
   if (layersPanel_) layersPanel_->refresh();

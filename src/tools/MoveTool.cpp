@@ -33,71 +33,93 @@ Rect unionRect(Rect a, Rect b) {
 
 void MoveTool::press(Document& doc, float x, float y, MouseButton btn) {
   if (btn != MouseButton::Left) return;
-  LayerBase* base = doc.activeLayer();
-  if (!base) return;
-  auto* px = dynamic_cast<PixelLayer*>(base);
-  if (!px) return;  // Only pixel layers carry backing imagery to move.
+
+  // Build the drag set: every PixelLayer in the multi-selection, falling
+  // back to just the active layer when no multi-selection is active.
+  // Non-pixel layers (groups, adjustments) are skipped — they have no
+  // origin we can shift.
+  dragLayers_.clear();
+  pending_.clear();
+  dirty_ = {};
+
+  std::vector<LayerBase*> candidates;
+  const auto& selIds = doc.selectedLayerIds();
+  if (!selIds.empty()) {
+    for (LayerId id : selIds) {
+      if (auto* l = doc.tree().findById(id)) candidates.push_back(l);
+    }
+  }
+  if (candidates.empty()) {
+    if (auto* a = doc.activeLayer()) candidates.push_back(a);
+  }
+
+  for (LayerBase* l : candidates) {
+    auto* px = dynamic_cast<PixelLayer*>(l);
+    if (!px) continue;
+    DragLayer d;
+    d.id = l->id;
+    d.beforeX = l->originX;
+    d.beforeY = l->originY;
+    d.layerW = px->image.width();
+    d.layerH = px->image.height();
+    dragLayers_.push_back(d);
+  }
+  if (dragLayers_.empty()) return;
 
   dragging_ = true;
-  layerId_ = base->id;
-  beforeX_ = base->originX;
-  beforeY_ = base->originY;
   startMouseX_ = static_cast<int>(std::floor(x));
   startMouseY_ = static_cast<int>(std::floor(y));
-  layerW_ = px->image.width();
-  layerH_ = px->image.height();
   docW_ = doc.width();
   docH_ = doc.height();
-  pending_.reset();
-  dirty_ = {};
 }
 
 void MoveTool::move(Document& doc, float x, float y) {
   if (!dragging_) return;
-  LayerBase* base = doc.activeLayer();
-  // Bail if the active layer was swapped mid-drag — we'd otherwise move
-  // the wrong layer.
-  if (!base || base->id != layerId_) {
-    dragging_ = false;
-    return;
-  }
   const int curX = static_cast<int>(std::floor(x));
   const int curY = static_cast<int>(std::floor(y));
-  const int newX = beforeX_ + (curX - startMouseX_);
-  const int newY = beforeY_ + (curY - startMouseY_);
-  const int oldOx = base->originX;
-  const int oldOy = base->originY;
-  if (newX == oldOx && newY == oldOy) return;
+  const int dx = curX - startMouseX_;
+  const int dy = curY - startMouseY_;
 
-  base->originX = newX;
-  base->originY = newY;
+  for (const auto& d : dragLayers_) {
+    LayerBase* base = doc.tree().findById(d.id);
+    if (!base) continue;
+    const int newX = d.beforeX + dx;
+    const int newY = d.beforeY + dy;
+    const int oldOx = base->originX;
+    const int oldOy = base->originY;
+    if (newX == oldOx && newY == oldOy) continue;
 
-  // Union the visible-in-doc regions of the old and new positions so the
-  // canvas recomposites exactly the pixels that changed. Much cheaper than
-  // a full recomposite on large docs.
-  const Rect beforeRect =
-      docRectOfLayer(oldOx, oldOy, layerW_, layerH_, docW_, docH_);
-  const Rect afterRect =
-      docRectOfLayer(newX, newY, layerW_, layerH_, docW_, docH_);
-  dirty_ = unionRect(dirty_, unionRect(beforeRect, afterRect));
+    base->originX = newX;
+    base->originY = newY;
+
+    const Rect beforeRect =
+        docRectOfLayer(oldOx, oldOy, d.layerW, d.layerH, docW_, docH_);
+    const Rect afterRect =
+        docRectOfLayer(newX, newY, d.layerW, d.layerH, docW_, docH_);
+    dirty_ = unionRect(dirty_, unionRect(beforeRect, afterRect));
+  }
 }
 
 void MoveTool::release(Document& doc, float x, float y, MouseButton btn) {
   if (btn != MouseButton::Left) return;
   if (!dragging_) return;
-  // Fold any final cursor delta in, then latch the commit.
+  // Fold any final cursor delta in, then latch the commits.
   move(doc, x, y);
   dragging_ = false;
-  LayerBase* base = doc.activeLayer();
-  if (!base || base->id != layerId_) return;
-  if (base->originX == beforeX_ && base->originY == beforeY_) return;
-  PendingMove p;
-  p.layerId = layerId_;
-  p.beforeX = beforeX_;
-  p.beforeY = beforeY_;
-  p.afterX = base->originX;
-  p.afterY = base->originY;
-  pending_ = p;
+
+  for (const auto& d : dragLayers_) {
+    LayerBase* base = doc.tree().findById(d.id);
+    if (!base) continue;
+    if (base->originX == d.beforeX && base->originY == d.beforeY) continue;
+    PendingMove p;
+    p.layerId = d.id;
+    p.beforeX = d.beforeX;
+    p.beforeY = d.beforeY;
+    p.afterX = base->originX;
+    p.afterY = base->originY;
+    pending_.push_back(p);
+  }
+  dragLayers_.clear();
 }
 
 }  // namespace tuxels

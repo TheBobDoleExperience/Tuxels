@@ -39,13 +39,13 @@ TEST(move_tool_press_move_release_shifts_origin) {
   CHECK_EQ(layer->originX, 40);
   CHECK_EQ(layer->originY, 47);
   tool.release(doc, 45.f, 52.f, MouseButton::Left);
-  auto commit = tool.takeCommit();
-  CHECK(commit.has_value());
-  CHECK_EQ(commit->layerId, id);
-  CHECK_EQ(commit->beforeX, 30);
-  CHECK_EQ(commit->beforeY, 40);
-  CHECK_EQ(commit->afterX, 40);
-  CHECK_EQ(commit->afterY, 47);
+  auto commits = tool.takeCommits();
+  CHECK_EQ(static_cast<int>(commits.size()), 1);
+  CHECK_EQ(commits[0].layerId, id);
+  CHECK_EQ(commits[0].beforeX, 30);
+  CHECK_EQ(commits[0].beforeY, 40);
+  CHECK_EQ(commits[0].afterX, 40);
+  CHECK_EQ(commits[0].afterY, 47);
 }
 
 TEST(move_tool_zero_delta_release_produces_no_commit) {
@@ -55,7 +55,7 @@ TEST(move_tool_zero_delta_release_produces_no_commit) {
   MoveTool tool;
   tool.press(doc, 6.f, 6.f, MouseButton::Left);
   tool.release(doc, 6.f, 6.f, MouseButton::Left);
-  CHECK(!tool.takeCommit().has_value());
+  CHECK(tool.takeCommits().empty());
 }
 
 TEST(move_tool_dirty_rect_unions_before_and_after_doc_extents) {
@@ -84,7 +84,7 @@ TEST(move_tool_ignores_non_pixel_active_layer_gracefully) {
   tool.press(doc, 10.f, 10.f, MouseButton::Left);
   tool.move(doc, 20.f, 20.f);
   tool.release(doc, 20.f, 20.f, MouseButton::Left);
-  CHECK(!tool.takeCommit().has_value());
+  CHECK(tool.takeCommits().empty());
 }
 
 TEST(move_layer_command_swaps_origin_on_undo_redo) {
@@ -146,6 +146,80 @@ TEST(move_layer_command_finds_layer_by_id_not_by_index) {
   CHECK_EQ(b->originY, 10);
   CHECK_EQ(a->originX, 0);  // unaffected
   CHECK_EQ(a->originY, 0);
+}
+
+// ---------- M7-S0 multi-select Move ----------
+
+TEST(move_tool_multi_select_drags_all_pixel_layers) {
+  Document doc(200, 200);
+  auto* a = addSolidLayer(doc, 30, 30, kRed, 10, 10, "A");
+  auto* b = addSolidLayer(doc, 30, 30, kGreen, 80, 80, "B");
+  doc.setActiveLayerId(b->id);
+  doc.setSelectedLayerIds({a->id, b->id});
+
+  MoveTool tool;
+  tool.press(doc, 100.f, 100.f, MouseButton::Left);
+  tool.move(doc, 130.f, 90.f);  // delta = (+30, -10)
+  CHECK_EQ(a->originX, 40);
+  CHECK_EQ(a->originY, 0);
+  CHECK_EQ(b->originX, 110);
+  CHECK_EQ(b->originY, 70);
+  tool.release(doc, 130.f, 90.f, MouseButton::Left);
+
+  auto commits = tool.takeCommits();
+  CHECK_EQ(static_cast<int>(commits.size()), 2);
+  // Both layers report (before, after) reflecting the same delta.
+  for (const auto& c : commits) {
+    if (c.layerId == a->id) {
+      CHECK_EQ(c.beforeX, 10);
+      CHECK_EQ(c.beforeY, 10);
+      CHECK_EQ(c.afterX, 40);
+      CHECK_EQ(c.afterY, 0);
+    } else if (c.layerId == b->id) {
+      CHECK_EQ(c.beforeX, 80);
+      CHECK_EQ(c.beforeY, 80);
+      CHECK_EQ(c.afterX, 110);
+      CHECK_EQ(c.afterY, 70);
+    }
+  }
+}
+
+TEST(move_tool_multi_select_skips_non_pixel_layers) {
+  Document doc(100, 100);
+  auto* a = addSolidLayer(doc, 30, 30, kRed, 0, 0, "A");
+  auto* b = addSolidLayer(doc, 30, 30, kGreen, 50, 50, "B");
+  // Selection includes a non-existent id alongside the two pixels.
+  doc.setActiveLayerId(b->id);
+  doc.setSelectedLayerIds({a->id, b->id, /*invalid*/ 9999});
+
+  MoveTool tool;
+  tool.press(doc, 60.f, 60.f, MouseButton::Left);
+  tool.move(doc, 65.f, 65.f);  // delta = (+5, +5)
+  tool.release(doc, 65.f, 65.f, MouseButton::Left);
+
+  auto commits = tool.takeCommits();
+  CHECK_EQ(static_cast<int>(commits.size()), 2);  // only the two valid pixels
+  CHECK_EQ(a->originX, 5);
+  CHECK_EQ(b->originX, 55);
+}
+
+TEST(move_tool_no_selection_falls_back_to_active) {
+  // Empty selection set: tool falls back to the active layer (the
+  // pre-M6 single-active path). No regression for non-multi-select use.
+  Document doc(100, 100);
+  auto* a = addSolidLayer(doc, 20, 20, kRed, 10, 10, "A");
+  doc.setActiveLayerId(a->id);
+  doc.setSelectedLayerIds({});  // explicitly empty
+
+  MoveTool tool;
+  tool.press(doc, 15.f, 15.f, MouseButton::Left);
+  tool.move(doc, 25.f, 30.f);  // delta = (+10, +15)
+  tool.release(doc, 25.f, 30.f, MouseButton::Left);
+
+  auto commits = tool.takeCommits();
+  CHECK_EQ(static_cast<int>(commits.size()), 1);
+  CHECK_EQ(commits[0].afterX, 20);
+  CHECK_EQ(commits[0].afterY, 25);
 }
 
 int main() { return tuxels::testing::run(); }
