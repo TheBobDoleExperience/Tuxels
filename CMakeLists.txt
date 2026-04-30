@@ -144,6 +144,7 @@ tuxels_add_test(test_curves)
 tuxels_add_test(test_levels)
 tuxels_add_test(test_spline)
 tuxels_add_test(test_clip_to_below)
+tuxels_add_test(test_layer_dnd)
 
 add_executable(test_png_io tests/test_png_io.cpp)
 set_target_properties(test_png_io PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)

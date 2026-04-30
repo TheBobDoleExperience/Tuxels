@@ -1,13 +1,19 @@
 #include "ui/LayersPanel.h"
 
 #include <QAction>
+#include <QApplication>
+#include <QDrag>
+#include <QDropEvent>
 #include <QIcon>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QMimeData>
+#include <QMouseEvent>
 #include <QStyle>
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <cstring>
 
 #include "core/Document.h"
 #include "layers/GroupLayer.h"
@@ -15,6 +21,155 @@
 #include "ui/LayerRowWidget.h"
 
 namespace tuxels {
+
+namespace {
+
+// Custom MIME type carrying the dragged layer's id (uint64). Internal to
+// the panel — we never accept drops from outside the LayersPanel itself.
+constexpr const char* kLayerIdMime = "application/x-tuxels-layerid";
+
+// QListWidget subclass that:
+//  - initiates drags carrying the dragged layer's id (so the row widgets
+//    eating mouse events can't break drag-start),
+//  - intercepts drops, computes the (target row, drop zone) pair from the
+//    cursor, and forwards to LayersPanel::emitLayerDrop.
+//
+// We *don't* call the base's drop implementation: QListWidget's
+// InternalMove would mutate the list-widget items but our true model is
+// the document's LayerTree, so we route the move through a LayerOpCommand
+// in MainWindow.
+class LayerListWidget : public QListWidget {
+ public:
+  LayerListWidget(LayersPanel* panel, QWidget* parent = nullptr)
+      : QListWidget(parent), panel_(panel) {
+    setSelectionMode(QAbstractItemView::SingleSelection);
+    setUniformItemSizes(false);
+    setDragEnabled(true);
+    setAcceptDrops(true);
+    setDropIndicatorShown(true);
+    setDragDropMode(QAbstractItemView::InternalMove);
+    setDefaultDropAction(Qt::MoveAction);
+  }
+
+ protected:
+  void mousePressEvent(QMouseEvent* event) override {
+    QListWidget::mousePressEvent(event);
+    if (event->button() == Qt::LeftButton) {
+      pressPos_ = event->position().toPoint();
+      pressItem_ = itemAt(pressPos_);
+    }
+  }
+
+  void mouseMoveEvent(QMouseEvent* event) override {
+    // Item widgets (the LayerRowWidget) eat mouse events that would
+    // normally reach the QListWidget, so QListWidget's built-in drag
+    // detection never fires. We initiate the drag manually from a press
+    // tracked in mousePressEvent; the press itself is forwarded into the
+    // children, but the item-rect hit-test still works for us via
+    // `itemAt()` in press because mouseMove arrives on the viewport even
+    // when item widgets handle their own presses (Qt re-routes via
+    // bubbling for moves with held buttons).
+    if ((event->buttons() & Qt::LeftButton) && pressItem_ != nullptr) {
+      const int dist = (event->position().toPoint() - pressPos_).manhattanLength();
+      if (dist >= QApplication::startDragDistance()) {
+        startDragForItem(pressItem_);
+        pressItem_ = nullptr;
+        return;
+      }
+    }
+    QListWidget::mouseMoveEvent(event);
+  }
+
+  void mouseReleaseEvent(QMouseEvent* event) override {
+    pressItem_ = nullptr;
+    QListWidget::mouseReleaseEvent(event);
+  }
+
+  void dragEnterEvent(QDragEnterEvent* event) override {
+    if (event->mimeData()->hasFormat(kLayerIdMime) && event->source() == this) {
+      event->acceptProposedAction();
+    } else {
+      event->ignore();
+    }
+  }
+
+  void dragMoveEvent(QDragMoveEvent* event) override {
+    if (event->mimeData()->hasFormat(kLayerIdMime) && event->source() == this) {
+      event->acceptProposedAction();
+    } else {
+      event->ignore();
+    }
+  }
+
+  void dropEvent(QDropEvent* event) override {
+    if (!panel_ || event->source() != this ||
+        !event->mimeData()->hasFormat(kLayerIdMime)) {
+      event->ignore();
+      return;
+    }
+    const QByteArray bytes = event->mimeData()->data(kLayerIdMime);
+    if (bytes.size() != static_cast<int>(sizeof(LayerId))) {
+      event->ignore();
+      return;
+    }
+    LayerId movedId = 0;
+    std::memcpy(&movedId, bytes.constData(), sizeof(LayerId));
+    if (movedId == 0) {
+      event->ignore();
+      return;
+    }
+
+    const QPoint pos = event->position().toPoint();
+    QListWidgetItem* targetItem = itemAt(pos);
+    LayerBase* targetLayer = nullptr;
+    DropZone zone = DropZone::Below;  // default for "outside any row"
+    if (targetItem) {
+      auto* targetRow =
+          qobject_cast<LayerRowWidget*>(itemWidget(targetItem));
+      if (targetRow) {
+        targetLayer = targetRow->layer();
+        const QRect r = visualItemRect(targetItem);
+        const int y = pos.y() - r.top();
+        const int h = r.height() > 0 ? r.height() : 1;
+        // 3-zone hit-test. Wider middle on group rows so the "drop INTO"
+        // gesture is easier to land; non-group rows treat the middle as
+        // "below".
+        if (y < h / 4) {
+          zone = DropZone::Above;
+        } else if (y > 3 * h / 4) {
+          zone = DropZone::Below;
+        } else {
+          zone = DropZone::On;
+        }
+      }
+    }
+    panel_->emitLayerDrop(movedId, targetLayer, zone);
+    event->acceptProposedAction();
+    // Intentionally do NOT call QListWidget::dropEvent — the panel
+    // refresh after the LayerOpCommand will rebuild the rows from the
+    // tree.
+  }
+
+ private:
+  void startDragForItem(QListWidgetItem* item) {
+    auto* row = qobject_cast<LayerRowWidget*>(itemWidget(item));
+    if (!row || !row->layer()) return;
+    const LayerId id = row->layer()->id;
+    auto* mime = new QMimeData();
+    QByteArray bytes(reinterpret_cast<const char*>(&id), sizeof(LayerId));
+    mime->setData(kLayerIdMime, bytes);
+    auto* drag = new QDrag(this);
+    drag->setMimeData(mime);
+    // Reasonable default cursor; no custom pixmap for now.
+    drag->exec(Qt::MoveAction);
+  }
+
+  LayersPanel* panel_;
+  QPoint pressPos_;
+  QListWidgetItem* pressItem_ = nullptr;
+};
+
+}  // namespace
 
 LayersPanel::LayersPanel(QWidget* parent)
     : QDockWidget(tr("Layers"), parent) {
@@ -46,9 +201,7 @@ LayersPanel::LayersPanel(QWidget* parent)
 
   vbox->addWidget(toolbar_);
 
-  list_ = new QListWidget(container);
-  list_->setSelectionMode(QAbstractItemView::SingleSelection);
-  list_->setUniformItemSizes(false);
+  list_ = new LayerListWidget(this, container);
   connect(list_, &QListWidget::currentRowChanged, this,
           &LayersPanel::onCurrentRowChanged);
   vbox->addWidget(list_, /*stretch=*/1);
@@ -135,6 +288,12 @@ void LayersPanel::refresh() {
 
     auto* item = new QListWidgetItem();
     item->setSizeHint(row->sizeHint());
+    // M6-S1: each row participates in drag-and-drop. The drag is initiated
+    // by the LayerListWidget's mouse handlers (item widgets eat the
+    // events otherwise); these flags let the QListWidget model accept the
+    // drop intent.
+    item->setFlags(item->flags() | Qt::ItemIsDragEnabled |
+                   Qt::ItemIsDropEnabled);
     list_->addItem(item);
     list_->setItemWidget(item, row);
     rows_.push_back(row);
@@ -182,6 +341,69 @@ void LayersPanel::onCurrentRowChanged(int row) {
 
 void LayersPanel::onLayerRowMutated(LayerBase* /*layer*/) {
   emit layerMutated();
+}
+
+void LayersPanel::emitLayerDrop(LayerId movedId, LayerBase* target,
+                                 DropZone zone) {
+  if (!doc_ || movedId == 0) return;
+
+  // Locate the dragged layer in the tree.
+  auto srcLoc = doc_->tree().locate(movedId);
+  if (!srcLoc) return;
+  GroupLayer* fromParent = srcLoc->parent;
+  const std::size_t fromIdx = srcLoc->index;
+  const LayerId fromParentId = fromParent ? fromParent->id : 0;
+
+  // Compute destination (parent, finalIndex) from the zone + target.
+  GroupLayer* toParent = nullptr;
+  std::size_t toIdx = 0;
+
+  if (target == nullptr) {
+    // Dropped on empty viewport — append at root top (panel top).
+    toParent = nullptr;
+    toIdx = doc_->tree().size();  // tree.move clamps to size if needed
+  } else if (zone == DropZone::On && target->kind() == LayerKind::Group) {
+    // Drop INTO group → land at end of children (panel-wise this is the
+    // top of the group's nested block, immediately under the group's
+    // header row).
+    auto* g = static_cast<GroupLayer*>(target);
+    toParent = g;
+    toIdx = g->children.size();
+  } else {
+    auto loc = doc_->tree().locate(target->id);
+    if (!loc) return;
+    toParent = loc->parent;
+    const std::size_t Kx = loc->index;
+    if (zone == DropZone::Above) {
+      toIdx = Kx;  // final tree idx = K_X (panel reverses tree order)
+    } else {
+      // Below in panel = lower tree idx by 1; clamp at 0.
+      toIdx = (Kx == 0) ? 0 : (Kx - 1);
+    }
+  }
+
+  const LayerId toParentId = toParent ? toParent->id : 0;
+
+  // Cycle check: a group cannot be dropped into itself or any descendant.
+  if (toParentId != 0) {
+    LayerId cur = toParentId;
+    while (cur != 0) {
+      if (cur == movedId) return;  // would create a cycle
+      auto curLoc = doc_->tree().locate(cur);
+      if (!curLoc) break;
+      cur = curLoc->parent ? curLoc->parent->id : 0;
+    }
+  }
+
+  // No-op: same parent + same effective slot.
+  if (fromParentId == toParentId && fromIdx == toIdx) return;
+  // No-op: same parent + adjacent slot that resolves to the same location
+  // after the erase. tree.move's post-erase frame collapses (K, K) and
+  // (K, K+1) to no-ops anyway, but bail early to avoid pushing a dead
+  // undo entry.
+  if (fromParentId == toParentId && fromIdx + 1 == toIdx) return;
+
+  emit layerDroppedRequested(movedId, toParentId, toIdx);
 }
 
 int LayersPanel::rowCountForTesting() const {

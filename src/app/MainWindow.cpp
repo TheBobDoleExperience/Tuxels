@@ -364,6 +364,47 @@ void MainWindow::buildDocks() {
           &MainWindow::onEditAdjustmentRequested);
   connect(layersPanel_, &LayersPanel::toggleClipToBelowRequested, this,
           &MainWindow::onLayerToggleClipToBelow);
+  // M6-S1: drag-and-drop layer reorder + drop-into-group. The panel
+  // emits this with the FINAL desired tree index; LayerTree::move accepts
+  // it directly. Wrap in a LayerOpCommand so the move is undoable.
+  connect(layersPanel_, &LayersPanel::layerDroppedRequested, this,
+          [this](LayerId movedId, LayerId targetParentId,
+                 std::size_t targetIdx) {
+            if (!doc_ || !undoStack_ || movedId == 0) return;
+            auto srcLoc = doc_->tree().locate(movedId);
+            if (!srcLoc) return;
+            const LayerId fromParentId =
+                srcLoc->parent ? srcLoc->parent->id : 0;
+            const std::size_t fromIdx = srcLoc->index;
+
+            auto resolveParent = [this](LayerId pid) -> GroupLayer* {
+              if (pid == 0) return nullptr;
+              return dynamic_cast<GroupLayer*>(
+                  doc_->tree().findById(pid));
+            };
+
+            auto doIt = [this, fromParentId, fromIdx, targetParentId,
+                         targetIdx, movedId, resolveParent]() {
+              doc_->tree().move(resolveParent(fromParentId), fromIdx,
+                                resolveParent(targetParentId), targetIdx);
+              doc_->setActiveLayerId(movedId);
+              refreshAfterUndoRedo();
+            };
+            auto undoIt = [this, fromParentId, fromIdx, targetParentId,
+                           targetIdx, movedId, resolveParent]() {
+              // Reverse: move back from (toParent, toIdx) to (fromParent,
+              // fromIdx). tree.move handles the post-erase frame for
+              // same-parent symmetric undo.
+              doc_->tree().move(resolveParent(targetParentId), targetIdx,
+                                resolveParent(fromParentId), fromIdx);
+              doc_->setActiveLayerId(movedId);
+              refreshAfterUndoRedo();
+            };
+
+            doIt();
+            undoStack_->push(std::make_unique<LayerOpCommand>(
+                "Move Layer", std::move(doIt), std::move(undoIt)));
+          });
 
   // Properties dock — non-modal editor for adjustment-layer params (M4-S2).
   // Tab-stacked under LayersPanel by default; users can drag-detach.

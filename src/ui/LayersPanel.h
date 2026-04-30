@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDockWidget>
+#include <cstdint>
 #include <vector>
 
 #include "compositor/BlendMode.h"
@@ -16,6 +17,15 @@ class Document;
 class GroupLayer;
 class LayerBase;
 class LayerRowWidget;
+
+// Where a drop landed relative to the target row's vertical extent. Used by
+// the panel's drop dispatcher to translate (target row, mouse y) → tree
+// (parent, index). M6-S1.
+enum class DropZone : std::uint8_t {
+  Above,  // upper third of the row → drop just above target in panel
+  On,     // middle third → drop INTO target if it's a Group, else Below
+  Below,  // lower third → drop just below target in panel
+};
 
 class LayersPanel : public QDockWidget {
   Q_OBJECT
@@ -48,6 +58,19 @@ class LayersPanel : public QDockWidget {
   void deleteMaskRequested(LayerBase* layer);
   void editAdjustmentRequested(LayerBase* layer);
   void toggleClipToBelowRequested(LayerBase* layer);
+  // M6-S1: emitted by the embedded list widget when the user drops a row.
+  // `targetParentId == 0` means root. `targetIndex` is the FINAL desired
+  // tree-index of the moved layer in the destination parent (post-move
+  // frame; LayerTree::move accepts this directly).
+  void layerDroppedRequested(LayerId movedId, LayerId targetParentId,
+                             std::size_t targetIndex);
+
+ public:
+  // Public so the embedded LayerListWidget subclass can dispatch drops.
+  // Translates (movedId, target row's bound layer, drop zone) into a
+  // (parent, index) pair and fires `layerDroppedRequested`. Same-parent
+  // no-ops are filtered out here.
+  void emitLayerDrop(LayerId movedId, LayerBase* target, DropZone zone);
 
  private slots:
   void onCurrentRowChanged(int row);
