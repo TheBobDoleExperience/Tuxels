@@ -373,6 +373,8 @@ void MainWindow::buildDocks() {
           &MainWindow::onEditAdjustmentRequested);
   connect(layersPanel_, &LayersPanel::toggleClipToBelowRequested, this,
           &MainWindow::onLayerToggleClipToBelow);
+  connect(layersPanel_, &LayersPanel::nameChangeRequested, this,
+          &MainWindow::onLayerNameChange);
   // M6-S1: drag-and-drop layer reorder + drop-into-group. The panel
   // emits this with the FINAL desired tree index; LayerTree::move accepts
   // it directly. Wrap in a LayerOpCommand so the move is undoable.
@@ -1764,6 +1766,28 @@ void MainWindow::onEditRedo() {
   const auto r = undoStack_->redo();
   if (!r.touched) return;
   refreshAfterUndoRedo(r.dirtyRect);
+}
+
+void MainWindow::onLayerNameChange(LayerBase* layer, std::string oldName,
+                                    std::string newName) {
+  if (!layer || !undoStack_) return;
+  if (oldName == newName) return;
+  const LayerId id = layer->id;
+  auto resolveLayer = [this, id]() -> LayerBase* {
+    return doc_ ? doc_->tree().findById(id) : nullptr;
+  };
+  auto doIt = [this, resolveLayer, newName]() {
+    if (auto* l = resolveLayer()) l->name = newName;
+    refreshAfterUndoRedo();
+  };
+  auto undoIt = [this, resolveLayer, oldName]() {
+    if (auto* l = resolveLayer()) l->name = oldName;
+    refreshAfterUndoRedo();
+  };
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>("Rename Layer",
+                                                    std::move(doIt),
+                                                    std::move(undoIt)));
 }
 
 void MainWindow::onLayerVisibilityChange(LayerBase* layer, bool oldVal, bool newVal) {

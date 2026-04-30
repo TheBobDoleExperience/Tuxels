@@ -58,6 +58,9 @@ class LayersPanel : public QDockWidget {
   void deleteMaskRequested(LayerBase* layer);
   void editAdjustmentRequested(LayerBase* layer);
   void toggleClipToBelowRequested(LayerBase* layer);
+  // M7-S5: in-place rename committed in a row widget.
+  void nameChangeRequested(LayerBase* layer, std::string oldName,
+                            std::string newName);
   // M6-S1: emitted by the embedded list widget when the user drops a row.
   // `targetParentId == 0` means root. `targetIndex` is the FINAL desired
   // tree-index of the moved layer in the destination parent (post-move

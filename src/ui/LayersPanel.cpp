@@ -358,6 +358,8 @@ void LayersPanel::refresh() {
             &LayersPanel::toggleClipToBelowRequested);
     connect(row, &LayerRowWidget::chevronToggled, this,
             &LayersPanel::onGroupChevronToggled);
+    connect(row, &LayerRowWidget::nameChangeRequested, this,
+            &LayersPanel::nameChangeRequested);
 
     auto* item = new QListWidgetItem();
     item->setSizeHint(row->sizeHint());

@@ -9,6 +9,7 @@
 class QCheckBox;
 class QComboBox;
 class QLabel;
+class QLineEdit;
 class QSlider;
 
 namespace tuxels {
@@ -72,6 +73,11 @@ class LayerRowWidget : public QWidget {
   // Chevron click on a group row — toggle the group's `isExpanded` flag.
   // Panel handles the side-effect (mutate flag + refresh).
   void chevronToggled(GroupLayer* group);
+  // M7-S5: double-click on the name label opens an in-place QLineEdit;
+  // commit (Enter / focus-loss with a non-empty diff) emits this so
+  // MainWindow can wrap the rename in a LayerOpCommand for undo.
+  void nameChangeRequested(LayerBase* layer, std::string oldName,
+                            std::string newName);
 
  protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
@@ -82,6 +88,7 @@ class LayerRowWidget : public QWidget {
   void onOpacitySliderMoved(int sliderValue);
   void onOpacitySliderPressed();
   void onOpacitySliderReleased();
+  void commitNameEdit();
 
  private:
   void rebuildThumbnail();
@@ -104,6 +111,10 @@ class LayerRowWidget : public QWidget {
   QLabel* thumb_ = nullptr;
   QLabel* maskThumb_ = nullptr;
   QLabel* nameLabel_ = nullptr;
+  // M7-S5: in-place rename. Hidden by default; double-click on the
+  // nameLabel_ shows the edit, focuses + selects all. Enter / focus-loss
+  // commits via `commitNameEdit`; Escape reverts.
+  QLineEdit* nameEdit_ = nullptr;
   QComboBox* blendCombo_ = nullptr;
   QSlider* opacitySlider_ = nullptr;
   QLabel* opacityValue_ = nullptr;

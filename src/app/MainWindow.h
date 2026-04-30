@@ -2,6 +2,7 @@
 
 #include <QMainWindow>
 #include <memory>
+#include <string>
 
 #include "compositor/BlendMode.h"
 #include "core/Document.h"
@@ -65,6 +66,8 @@ class MainWindow : public QMainWindow {
   void onLayerVisibilityChange(LayerBase* layer, bool oldVal, bool newVal);
   void onLayerBlendChange(LayerBase* layer, BlendMode oldMode, BlendMode newMode);
   void onLayerOpacityCommit(LayerBase* layer, float oldVal, float newVal);
+  void onLayerNameChange(LayerBase* layer, std::string oldName,
+                         std::string newName);
   void onAddLayerMask();
   void onDeleteLayerMask();
   void onLayerPaintTargetChange(LayerBase* layer, PaintTarget target);

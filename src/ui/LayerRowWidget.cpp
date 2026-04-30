@@ -7,7 +7,9 @@
 #include <QFont>
 #include <QHBoxLayout>
 #include <QImage>
+#include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
@@ -107,7 +109,21 @@ LayerRowWidget::LayerRowWidget(QWidget* parent) : QWidget(parent) {
 
   nameLabel_ = new QLabel(this);
   nameLabel_->setMinimumWidth(90);
+  // M7-S5: double-click the label to begin in-place rename. The label
+  // installs an eventFilter on `this` (LayerRowWidget) so the existing
+  // eventFilter dispatch can route the gesture.
+  nameLabel_->installEventFilter(this);
   layout->addWidget(nameLabel_, /*stretch=*/1);
+
+  nameEdit_ = new QLineEdit(this);
+  nameEdit_->setMinimumWidth(90);
+  nameEdit_->hide();
+  // editingFinished fires on Enter and on focus-loss. We also intercept
+  // Escape via the eventFilter to revert without committing.
+  nameEdit_->installEventFilter(this);
+  layout->addWidget(nameEdit_, /*stretch=*/1);
+  connect(nameEdit_, &QLineEdit::editingFinished, this,
+          &LayerRowWidget::commitNameEdit);
 
   blendCombo_ = new QComboBox(this);
   blendCombo_->setMinimumWidth(110);
@@ -140,6 +156,12 @@ LayerRowWidget::LayerRowWidget(QWidget* parent) : QWidget(parent) {
 void LayerRowWidget::bindToLayer(LayerBase* layer) {
   layer_ = layer;
   blockSignals_ = true;
+  // Drop any in-progress rename when binding to a different layer (the row
+  // gets reused across panel rebuilds, so a stale edit could carry over).
+  if (nameEdit_ && nameEdit_->isVisible()) {
+    nameEdit_->hide();
+    if (nameLabel_) nameLabel_->show();
+  }
   if (layer_) {
     const bool isGroup = (layer_->kind() == LayerKind::Group);
     // Repopulate the blend combo if the kind transitioned (e.g. row reused
@@ -290,8 +312,44 @@ void LayerRowWidget::onOpacitySliderReleased() {
   emit opacityEditCommitted(layer_, opacityBeforeDrag_, newVal);
 }
 
+void LayerRowWidget::commitNameEdit() {
+  if (!layer_ || !nameEdit_ || !nameEdit_->isVisible()) return;
+  const std::string newName = nameEdit_->text().toStdString();
+  const std::string oldName = layer_->name;
+  // Always restore the label/visible state regardless of diff, so the row
+  // looks settled after Enter / focus-loss.
+  nameEdit_->hide();
+  nameLabel_->show();
+  if (newName.empty() || newName == oldName) return;
+  emit nameChangeRequested(layer_, oldName, newName);
+}
+
 bool LayerRowWidget::eventFilter(QObject* watched, QEvent* event) {
   if (!layer_) return QWidget::eventFilter(watched, event);
+  // M7-S5: double-click on the name label → swap label for in-place
+  // QLineEdit, focus + select-all so the user can immediately type.
+  if (watched == nameLabel_ &&
+      event->type() == QEvent::MouseButtonDblClick) {
+    nameEdit_->setText(QString::fromStdString(layer_->name));
+    nameLabel_->hide();
+    nameEdit_->show();
+    nameEdit_->setFocus();
+    nameEdit_->selectAll();
+    return true;
+  }
+  if (watched == nameEdit_ && event->type() == QEvent::KeyPress) {
+    auto* ke = static_cast<QKeyEvent*>(event);
+    if (ke->key() == Qt::Key_Escape) {
+      // Revert without committing: hide the edit, clear focus, restore
+      // the label. editingFinished may still fire on focus-loss after
+      // this — commitNameEdit checks that the edit is visible, so the
+      // post-revert focus-loss is a no-op.
+      nameEdit_->hide();
+      nameLabel_->show();
+      setFocus();
+      return true;
+    }
+  }
   if (watched == chevron_ && event->type() == QEvent::MouseButtonPress) {
     auto* me = static_cast<QMouseEvent*>(event);
     if (me->button() == Qt::LeftButton &&
