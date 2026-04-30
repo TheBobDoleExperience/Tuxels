@@ -57,6 +57,7 @@ class MainWindow : public QMainWindow {
   void onLayerDelete();
   void onLayerDuplicate();
   void onLayerRasterize();
+  void onLayerMergeDown();
   void onLayerMoveUp();
   void onLayerMoveDown();
   void onLayerPanelMutated();

@@ -156,6 +156,14 @@ void MainWindow::buildMenus() {
   connect(rasterAct, &QAction::triggered, this,
           &MainWindow::onLayerRasterize);
 
+  // M9-S0: PS-style Ctrl+E merge active pixel layer with the layer
+  // immediately below into a single pixel layer; active's blend +
+  // opacity + mask are baked into the merged pixels.
+  auto* mergeDownAct = layerMenu->addAction(tr("&Merge Down"));
+  mergeDownAct->setShortcut(QKeySequence(tr("Ctrl+E")));
+  connect(mergeDownAct, &QAction::triggered, this,
+          &MainWindow::onLayerMergeDown);
+
   layerMenu->addSeparator();
   // Group / Ungroup (M5-S4). Enabled state tracks the active layer:
   // Group Layer requires any active layer; Ungroup Layer requires the
@@ -1547,6 +1555,106 @@ void MainWindow::onLayerRasterize() {
   doIt();
   undoStack_->push(std::make_unique<LayerOpCommand>(
       "Rasterize Layer", std::move(doIt), std::move(undoIt)));
+}
+
+void MainWindow::onLayerMergeDown() {
+  if (!doc_ || !undoStack_) return;
+  LayerBase* active = doc_->activeLayer();
+  if (!active) return;
+  if (active->kind() != LayerKind::Pixel) {
+    statusBar()->showMessage(
+        tr("Merge Down currently supports pixel layers only."), 2000);
+    return;
+  }
+  auto loc = doc_->tree().locate(active->id);
+  if (!loc) return;
+  if (loc->index == 0) {
+    statusBar()->showMessage(tr("Nothing below to merge into."), 2000);
+    return;
+  }
+  // The "layer immediately below" in tree terms is at idx-1 of the same
+  // parent. Must also be a pixel layer for the simple merge path; if it's
+  // a group / adjustment, status message and bail.
+  auto& siblings = loc->parent ? loc->parent->children
+                                : const_cast<std::vector<std::unique_ptr<LayerBase>>&>(
+                                      doc_->tree().raw());
+  LayerBase* below = siblings[loc->index - 1].get();
+  if (!below || below->kind() != LayerKind::Pixel) {
+    statusBar()->showMessage(
+        tr("Merge Down requires the layer below to be a pixel layer."),
+        2000);
+    return;
+  }
+
+  // Compose the two layers in isolation: clone below + active into a tmp
+  // doc. compose treats them as the only layers in the world; active's
+  // blend/opacity/mask interact with below's pixels exactly as they
+  // would in-document, and the result is a flat pixel image we install
+  // in below's slot.
+  Document tmp(doc_->width(), doc_->height());
+  tmp.tree().add(cloneLayer(*below, tmp));
+  tmp.tree().add(cloneLayer(*active, tmp));
+  TuxImage flat(doc_->width(), doc_->height());
+  compose(tmp.tree(), flat);
+
+  auto merged = std::make_unique<PixelLayer>();
+  merged->image = std::move(flat);
+  merged->id = doc_->nextLayerId();
+  merged->name = below->name;
+  merged->visible = below->visible;
+  merged->opacity = 1.f;       // baked
+  merged->blend = below->blend;
+  merged->clipToBelow = below->clipToBelow;
+  merged->colorLabel = below->colorLabel;
+  // No mask on merged: below's mask was applied during compose; same for
+  // active's mask. The user can add a fresh mask after.
+  const LayerId mergedId = merged->id;
+  const LayerId parentId = loc->parent ? loc->parent->id : 0;
+  const std::size_t belowIdx = loc->index - 1;
+  const LayerId prevActiveId = doc_->activeLayerId();
+
+  // Stashes: original below + active for undo; merged for redo.
+  auto belowStash = std::make_shared<std::unique_ptr<LayerBase>>();
+  auto activeStash = std::make_shared<std::unique_ptr<LayerBase>>();
+  auto mergedStash =
+      std::make_shared<std::unique_ptr<LayerBase>>(std::move(merged));
+
+  auto resolveParent = [this](LayerId pid) -> GroupLayer* {
+    if (pid == 0) return nullptr;
+    return dynamic_cast<GroupLayer*>(doc_->tree().findById(pid));
+  };
+
+  auto doIt = [this, parentId, belowIdx, mergedId, belowStash, activeStash,
+               mergedStash, resolveParent]() mutable {
+    GroupLayer* parent = resolveParent(parentId);
+    if (!*mergedStash) return;
+    // Remove active first (at belowIdx + 1) so subsequent below removal
+    // doesn't shift indexes in a way that confuses the insert.
+    *activeStash = doc_->tree().removeFromPath(parent, belowIdx + 1);
+    *belowStash = doc_->tree().removeFromPath(parent, belowIdx);
+    if (!*activeStash || !*belowStash) return;
+    doc_->tree().insertAtPath(parent, belowIdx, std::move(*mergedStash));
+    doc_->setActiveLayerId(mergedId);
+    doc_->setSelectedLayerIds({mergedId});
+    refreshAfterUndoRedo();
+  };
+  auto undoIt = [this, parentId, belowIdx, prevActiveId, belowStash,
+                 activeStash, mergedStash, resolveParent]() mutable {
+    GroupLayer* parent = resolveParent(parentId);
+    if (!*belowStash || !*activeStash) return;
+    *mergedStash = doc_->tree().removeFromPath(parent, belowIdx);
+    doc_->tree().insertAtPath(parent, belowIdx, std::move(*belowStash));
+    doc_->tree().insertAtPath(parent, belowIdx + 1, std::move(*activeStash));
+    doc_->setActiveLayerId(prevActiveId);
+    doc_->setSelectedLayerIds(prevActiveId == 0
+                                  ? std::vector<LayerId>{}
+                                  : std::vector<LayerId>{prevActiveId});
+    refreshAfterUndoRedo();
+  };
+
+  doIt();
+  undoStack_->push(std::make_unique<LayerOpCommand>(
+      "Merge Down", std::move(doIt), std::move(undoIt)));
 }
 
 void MainWindow::onLayerMoveUp() {
