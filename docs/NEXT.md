@@ -4,66 +4,64 @@
 
 ## Immediately Next
 
-**M11 shipped** as `v0.11.0-m11` on 2026-04-30:
-- M11-S0 brush cursor radius reflects pressure (`2e7dcfd`)
-- M11-S1 Eyedropper tool (`70a8bd9`)
-- M11-S2 docs + tag
+**M12 shipped** as `v0.12.0-m12` on 2026-04-30 (414 cases / 42 execs):
+- M12 PSD import (read-only) — header, raw + PackBits RLE, multi-
+  layer, group section dividers, per-layer user masks (`9427355`)
+- M12-S5 file menu integration + docs + tag
 
-**M10 shipped** as `v0.10.0-m10` on 2026-04-30 (407 cases / 41 execs).
-M10-S0 compose() span overrides (`25dd3d0`); M10-S1+S2 TransformTool
-multi-source + batched commit (`fad8eff`); M10-S3 docs + tag. The
-M7-deferred Free-Transform-multi-select work is finally landed.
+**M11 shipped** as `v0.11.0-m11` (pressure-aware brush cursor +
+Eyedropper). **M10 shipped** as `v0.10.0-m10` (Free Transform on
+multi-select).
 
 Tags pushed; main pushed.
 
-**Start here: M12 kickoff.** With Free Transform multi-select +
-Eyedropper landed, the next-biggest gaps are PSD import, Smart
-Objects, and Layer Effects.
+**Start here: M13 kickoff.** With PSD read landed, the next-biggest
+gaps are Smart Objects, Layer Effects, and Text Layers.
 
-## M12 Candidates
+## M13 Candidates
 
-1. **PSD import (read-only).** SCOPE.md §5.1 — deferred since M0.
-   Largest pure-format work; binary edge cases gnarly. The .txl v5
-   section-divider scheme matches PSD's flat-with-markers structure;
-   adjustment kinds round-trip through .txl v3 already. Map PSD blend
-   ordinals to the local enum, RLE-decompress channel data, walk the
-   layer-and-mask-info section's flat list. Read-only for M11; write is
-   a separate milestone.
+1. **Layer effects.** Drop shadow, glow, stroke, inner shadow. Each
+   effect is a per-layer pre-pass between renderTile and blend.
+   Cross-tile blur is the main complexity (alpha pre-pass needs to
+   read N pixels into adjacent tiles). For a first cut, drop shadow
+   only with box blur within tile boundaries. Big surface — could
+   span 2 milestones.
 
-2. **Smart Objects.** Re-editable embedded sub-documents (a `Document`
-   inside a layer). Recursive compose already done (M5-S1). New pieces:
-   .txl extension for embedded docs; separate undo stack per child
-   window; smart-object pixel render on demand.
+2. **Text layers.** New `TextLayer` kind. Qt's `QPainter` +
+   `QFontMetrics` for glyph layout; rasterize on demand into a
+   tile-sparse TuxImage. Whole milestone.
 
-3. **Layer effects (drop shadow, glow, stroke, inner shadow, …).** PS
-   uses these heavily. Big surface area — each effect is its own pixel
-   shader / filter; the layer's render path needs a new
-   `applyEffectsToOutput()` hook between renderTile and blend.
+3. **Smart Objects.** Re-editable embedded sub-documents. Recursive
+   compose already done. New pieces: .txl extension for embedded
+   docs; separate undo stack per child window.
 
-4. **Text layers.** Big. New `TextLayer` kind; Qt's `QPainter` +
-   `QFontMetrics` for glyph layout; resterize on demand into a tile-
-   sparse TuxImage.
+4. **PSD: ZIP compression decoders.** M12 only handles raw + RLE.
+   ZIP without prediction (compression == 2) is a straight zlib
+   inflate; ZIP with prediction (compression == 3) requires a
+   reverse-prediction pass. Pull in zlib via Qt's Qt6::Core, or
+   bundle miniz.
 
-5. **Color picker: Alt-eyedropper while in Brush.** Today Eyedropper is
-   keyboard-only. PS lets you Alt+click while the Brush tool is active
-   to temporarily pick a color without switching tools. Small follow-up
-   to M11-S1 (~30 min).
+5. **PSD: smart-object pixel data.** Currently smart-object records
+   flatten to whatever composite the file embeds; PSD also stores
+   the original embedded image. Could surface that as a re-editable
+   sub-document.
 
-6. **Performance pass.** Multi-thread `composeTileRange` per tile;
+6. **PSD: Layer effects fxrl decoder.** PSD's `lfx2` block carries
+   layer-effect params (drop shadow, glow, stroke, etc.). Once M13's
+   own Layer Effects land, decode `lfx2` into them.
+
+7. **Performance pass.** Multi-thread `composeTileRange` per tile;
    per-tile GPU upload via QOpenGLTexture; lazy histogram recompute.
-   Largest engineering scope, no user-visible features.
 
-7. **"Isolate adjustments" toggle** for groups (separate from blend
-   mode). One bool on GroupLayer + .txl v7.
+8. **Color picker: Alt-eyedropper while in Brush.** PS lets you
+   Alt+click while the Brush tool is active to temporarily pick a
+   color without switching tools. Small follow-up to M11-S1.
 
-8. **Merge Down through groups / adjustments.** M9-S0 only handles
-   pixel-into-pixel.
+9. **"Isolate adjustments" toggle** for groups. One bool on
+   GroupLayer + .txl v7.
 
-9. **Layer search / filter** in LayersPanel. Type-to-filter the row
-   list — useful in deeply nested docs.
-
-Kickoff agenda: pick the scope, draft a plan, commit via
-ExitPlanMode.
+10. **Layer search / filter** in LayersPanel. Type-to-filter the row
+    list — useful in deeply nested docs.
 
 Cold-start verification:
 
@@ -72,12 +70,12 @@ cmake --build build && ctest --test-dir build
 QT_QPA_PLATFORM=offscreen timeout 2 ./build/tuxels
 ```
 
-Expect 41 executables / 407 internal cases at `v0.11.0-m11`.
+Expect 42 executables / 414 internal cases at `v0.12.0-m12`.
 
 ## Cold-Start Checklist
 
-1. `cat docs/STATUS.md` — current state (M11 ✅ shipped, M12 TBD).
-2. This file — M12 kickoff candidates.
+1. `cat docs/STATUS.md` — current state (M12 ✅ shipped, M13 TBD).
+2. This file — M13 kickoff candidates.
 3. `cat docs/ARCHITECTURE.md` — don't re-derive decisions:
    - M5 layer tree + recursive compose + .txl v5 sections
    - M6 group properties / D&D / multi-select
@@ -86,8 +84,9 @@ Expect 41 executables / 407 internal cases at `v0.11.0-m11`.
    - M8 color labels (.txl v6) / tablet pressure / Rasterize
    - M9 Merge Down
    - M10 compose span overrides + TransformTool multi-source
-   - M11 pressure-aware brush cursor + Eyedropper tool
-4. `git log --oneline -25` + `git tag --list` — recent commits and
-   shipped tags (`v0.0.1-m0` through `v0.11.0-m11`).
+   - M11 pressure-aware brush cursor + Eyedropper
+   - M12 PSD read (raw + RLE; sections; masks)
+4. `git log --oneline -30` + `git tag --list` — recent commits and
+   shipped tags (`v0.0.1-m0` through `v0.12.0-m12`).
 5. `cmake --build build && ctest --test-dir build` — confirm
-   green tree (41 executables / 407 cases at `v0.11.0-m11`).
+   green tree (42 executables / 414 cases at `v0.12.0-m12`).

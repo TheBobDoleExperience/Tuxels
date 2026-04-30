@@ -782,3 +782,43 @@ layers, Performance pass.
 
 End of session: 7 milestones shipped (M5 push + M6 + M7 + M8 + M9
 + M10 + M11), 31+ commits, 41 executables / 407 internal cases.
+
+### M12 — PSD import (read-only) ✅ shipped
+
+- **M12** (`9427355`). Read-only PSD import — SCOPE.md §5.1 deferred
+  since M0, finally landed. New `src/io/PsdIO.{h,cpp}` with
+  `loadPsd(path)` and `loadPsdBytes(span)`. Big-endian Cursor
+  fails fast; PackBits decoder per Apple's spec; per-layer extra-
+  data block stream scanning for `lsct` (section divider) and
+  `luni` (unicode name override). Section dividers reconstruct
+  group nesting via a parse stack (type-3 opens, type-1/2
+  finalizes). Per-layer user masks (channel -2) populate
+  LayerMask. PSD blend keys map to the local enum.
+- **M12-S5** (this commit). MainWindow's File → Open dispatches
+  `.psd` to loadPsd; file dialog filter advertises PSD. STATUS /
+  NEXT / ARCHITECTURE / LOG updated. Tag `v0.12.0-m12` + push.
+
+7 hand-rolled byte-buffer tests in `test_psd_io.cpp` covering
+header rejection paths + happy-path RGBA + multi-layer
+blend/opacity/name + group section dividers + per-layer mask
+round-trip. 42 executables / 414 cases.
+
+End of session: 8 milestones shipped autonomously (M5 push + M6
++ M7 + M8 + M9 + M10 + M11 + M12), 33+ commits on main, 42
+executables / 414 internal cases (up from M5's 37 / 364 — that's
++5 executables and +50 internal cases across this session).
+
+Cumulative deferred-list status:
+  - All M5/M6/M7 polish items (group props, D&D, multi-select,
+    Move/Up-Down/drop-indicator/persistence/duplicate/rename/
+    context menu) ✓
+  - Color labels (M8-S0), tablet pressure (M8-S1), Rasterize
+    (M8-S2), Merge Down (M9) ✓
+  - Free Transform on multi-select (M10) ✓ — the M7-deferred
+    architectural item
+  - Pressure-aware cursor (M11-S0), Eyedropper (M11-S1) ✓
+  - PSD read-only import (M12) ✓ — SCOPE.md §5.1, since M0
+
+Remaining big-ticket items (M13+): Layer effects (drop shadow,
+glow, stroke), Text layers, Smart Objects, ZIP compression
+decoders for PSD, Performance pass.
