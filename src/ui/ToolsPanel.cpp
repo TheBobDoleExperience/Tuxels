@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QMouseEvent>
 #include <QScrollArea>
+#include <QSettings>
 #include <QSlider>
 #include <QSpinBox>
 #include <QToolButton>
@@ -28,6 +29,24 @@
 namespace tuxels {
 
 namespace {
+
+// M7-S3: stable string key per ToolId for QSettings persistence. Strings
+// outlive enum-ordinal shifts and survive future tool-list reorders.
+QString toolKey(ToolId id) {
+  switch (id) {
+    case ToolId::Move: return QStringLiteral("Move");
+    case ToolId::Marquee: return QStringLiteral("Marquee");
+    case ToolId::Lasso: return QStringLiteral("Lasso");
+    case ToolId::PolyLasso: return QStringLiteral("PolyLasso");
+    case ToolId::MagicWand: return QStringLiteral("MagicWand");
+    case ToolId::SelectByColor: return QStringLiteral("SelectByColor");
+    case ToolId::Crop: return QStringLiteral("Crop");
+    case ToolId::Brush: return QStringLiteral("Brush");
+    case ToolId::Bucket: return QStringLiteral("Bucket");
+    case ToolId::Transform: return QStringLiteral("Transform");
+  }
+  return QStringLiteral("Unknown");
+}
 
 // A clickable color square. No Q_OBJECT → no MOC; uses a std::function
 // callback instead of a signal, which keeps this fully self-contained in
@@ -157,6 +176,10 @@ ToolsPanel::ToolsPanel(QWidget* parent) : QDockWidget(tr("Tools"), parent) {
   setWidget(scroll);
 
   updateSwatchColors();
+
+  // M7-S3: restore each section's expanded/collapsed state from QSettings.
+  // Save-on-toggle is wired in addSection().
+  loadSectionStates();
 }
 
 CollapsibleSection* ToolsPanel::addSection(QWidget* root, ToolId id,
@@ -167,8 +190,11 @@ CollapsibleSection* ToolsPanel::addSection(QWidget* root, ToolId id,
   section->setBody(body);
   connect(section, &CollapsibleSection::headerClicked, this,
           [this, id]() { emit toolPicked(id); });
-  // chevronClicked is intentionally not wired — CollapsibleSection already
-  // toggles its own expansion in the eventFilter; we don't need a slot.
+  // M7-S3: persist expansion state on every chevron click. Saving on
+  // each toggle (rather than at app exit) is more robust to crashes;
+  // QSettings batches I/O so the cost per click is negligible.
+  connect(section, &CollapsibleSection::chevronClicked, this,
+          [this, id, section]() { saveSectionState(id, section->isExpanded()); });
 
   static_cast<QVBoxLayout*>(root->layout())->addWidget(section);
   sections_[static_cast<int>(id)] = section;
@@ -759,6 +785,26 @@ void ToolsPanel::onWandToleranceChanged(int v) {
 void ToolsPanel::updateSwatchColors() {
   if (fgSwatch_) asSwatch(fgSwatch_)->setColor(fg_);
   if (bgSwatch_) asSwatch(bgSwatch_)->setColor(bg_);
+}
+
+void ToolsPanel::loadSectionStates() {
+  QSettings settings;
+  settings.beginGroup(QStringLiteral("ToolsPanel/Section"));
+  for (auto& [idInt, section] : sections_) {
+    if (!section) continue;
+    const QString key = toolKey(static_cast<ToolId>(idInt));
+    if (settings.contains(key)) {
+      section->setExpanded(settings.value(key).toBool());
+    }
+  }
+  settings.endGroup();
+}
+
+void ToolsPanel::saveSectionState(ToolId id, bool expanded) {
+  QSettings settings;
+  settings.beginGroup(QStringLiteral("ToolsPanel/Section"));
+  settings.setValue(toolKey(id), expanded);
+  settings.endGroup();
 }
 
 }  // namespace tuxels

@@ -92,6 +92,12 @@ class ToolsPanel : public QDockWidget {
   void applyFgToBrush();
   void updateSwatchColors();
 
+  // M7-S3: per-section expand/collapse persistence. Keyed by stable
+  // string per `ToolId` (not the enum ordinal, which is implementation
+  // detail). Loaded once in ctor; saved on every chevron toggle.
+  void loadSectionStates();
+  void saveSectionState(ToolId id, bool expanded);
+
   QWidget* buildMoveBody(QWidget* parent);
   QWidget* buildMarqueeBody(QWidget* parent);
   QWidget* buildLassoBody(QWidget* parent, bool poly);

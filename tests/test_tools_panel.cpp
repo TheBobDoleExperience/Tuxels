@@ -1,5 +1,7 @@
 #include <QApplication>
 #include <QObject>
+#include <QSettings>
+#include <QTemporaryDir>
 
 #include "test_harness.h"
 #include "tools/ToolId.h"
@@ -108,9 +110,41 @@ TEST(setLassoMode_does_not_emit_lassoModeChanged) {
   CHECK_EQ(hits, 0);
 }
 
+// ---------- M7-S3 section persistence ----------
+
+TEST(section_state_persists_via_qsettings) {
+  // First instance: collapse Brush + Bucket via the chevron path so the
+  // panel's chevronClicked → saveSectionState wiring fires.
+  {
+    ToolsPanel panel;
+    CHECK(panel.sectionFor(ToolId::Brush)->isExpanded());
+    panel.sectionFor(ToolId::Brush)->simulateChevronClick();
+    panel.sectionFor(ToolId::Bucket)->simulateChevronClick();
+    CHECK(!panel.sectionFor(ToolId::Brush)->isExpanded());
+    CHECK(!panel.sectionFor(ToolId::Bucket)->isExpanded());
+  }
+  // Second instance: ctor's loadSectionStates restores the saved values.
+  {
+    ToolsPanel panel;
+    CHECK(!panel.sectionFor(ToolId::Brush)->isExpanded());
+    CHECK(!panel.sectionFor(ToolId::Bucket)->isExpanded());
+    // Other sections still default expanded.
+    CHECK(panel.sectionFor(ToolId::Move)->isExpanded());
+    CHECK(panel.sectionFor(ToolId::Marquee)->isExpanded());
+  }
+}
+
 }  // namespace tuxels
 
 int main(int argc, char** argv) {
   QApplication app(argc, argv);
+  // Isolate the test's QSettings to an in-memory-equivalent path so we
+  // don't pollute (or read from) the user's real config. QTemporaryDir
+  // owns the lifetime; QSettings::setPath redirects.
+  app.setOrganizationName(QStringLiteral("TuxelsTest"));
+  app.setApplicationName(QStringLiteral("TuxelsTest"));
+  QTemporaryDir tmpDir;
+  QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, tmpDir.path());
+  QSettings::setDefaultFormat(QSettings::IniFormat);
   return tuxels::testing::run();
 }
